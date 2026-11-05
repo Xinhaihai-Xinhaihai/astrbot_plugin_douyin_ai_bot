@@ -3,7 +3,7 @@ display_name: 抖音陪看评论
 desc: 让 bot 看懂抖音视频（页面解析+下载抽帧喂多模态视觉模型），生成一条像真人的短评并用登录身份发出去。不点赞、不刷量，评论频率受同视频冷却+全局间隔双重限制，评完自动渲染可爱风截图推送到指定群。
 short_desc: 抖音看视频+写评论
 help: "用法：dy评论 <视频链接或视频号>（解析→下载抽帧→视觉模型看懂→生成评论→发出→截图推送）；dy登录 / dy确认（扫码登录，cookie 只存本地）；dy状态（看登录/视觉模型/冷却）；dy重置冷却（清冷却）。视觉模型在插件配置里单独指定（vision_provider_id + vision_model），支持 vision_fallback_provider_ids 回退链，不用改 AstrBot 主模型。"
-version: v0.1.0
+version: v1.0.0
 author: 心海海
 repo: https://github.com/Xinhaihai-Xinhaihai/astrbot_plugin_douyin_ai_bot
 category: 娱乐
