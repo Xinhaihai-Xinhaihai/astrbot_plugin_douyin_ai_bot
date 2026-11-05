@@ -681,15 +681,17 @@ class DouyinAiBotPlugin(Star):
             cleanup(vc)
 
     async def _share_to_master(self, chain: MessageChain, aweme_id: str):
-        """推给主人私聊；没配主人就推到 notify_groups。"""
-        master = self._master_user_id()
-        if master:
+        """推直播转发群（forward_groups）；没配再退回 notify_groups。"""
+        groups = [g for g in _to_list(self._c("forward_groups", [])) if g.isdigit()]
+        pushed = []
+        for gid in groups:
             try:
-                pid = self._platform_id or "default"
-                await self.context.send_message(f"{pid}:FriendMessage:{master}", chain)
-                return
+                await self._send_to_group(gid, chain)
+                pushed.append(gid)
             except Exception as e:
-                logger.warning("[douyin_ai] 推主人失败: %s", e)
+                logger.warning("[douyin_ai] 转发群 %s 推送失败: %s", gid, e)
+        if pushed:
+            return
         for gid in [g for g in _to_list(self._c("notify_groups", [])) if g.isdigit()]:
             try:
                 await self._send_to_group(gid, chain)
