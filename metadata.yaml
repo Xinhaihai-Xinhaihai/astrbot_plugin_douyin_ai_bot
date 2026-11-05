@@ -1,15 +1,24 @@
 name: astrbot_plugin_douyin_ai_bot
-display_name: 抖音陪看评论
-desc: 让 bot 看懂抖音视频（页面解析+下载抽帧喂多模态视觉模型），生成一条像真人的短评并用登录身份发出去。不点赞、不刷量，评论频率受同视频冷却+全局间隔双重限制，评完自动渲染可爱风截图推送到指定群。
-short_desc: 抖音看视频+写评论
-help: "用法：dy评论 <视频链接或视频号>（解析→下载抽帧→视觉模型看懂→生成评论→发出→截图推送）；dy登录 / dy确认（扫码登录，cookie 只存本地）；dy状态（看登录/视觉模型/冷却）；dy重置冷却（清冷却）。视觉模型在插件配置里单独指定（vision_provider_id + vision_model），支持 vision_fallback_provider_ids 回退链，不用改 AstrBot 主模型。"
-version: v1.0.0
+display_name: 抖音AI陪看
+desc: |
+  抖音直播订阅检测 + AI 陪看评论 + 主动刷视频。
+  - 直播订阅：定时轮询开播状态，开播推「封面+链接+配文」到指定群，群里说触发词即时查
+  - 陪看评论：发视频链接 → 下载抽帧喂多模态视觉模型 → 生成像真人的短评 → 登录身份发出 → 渲染截图推群
+  - 主动刷视频：定时刷候选（特别关心 up 优先）→ 视觉模型打分 → 过线才评 → 截图推转发群
+  - 互动提醒：轮询私信/评论回复，推转发群，支持一键回私信
+  不点赞、不刷量，评论频率受同视频冷却+全局间隔双重限制。
+short_desc: 抖音直播检测+AI看视频发评论+主动刷
+help: "dy评论 <视频链接> 看视频发短评推截图；订阅 <抖音号/链接> 订阅直播；dy登录/dy_qr/dy_cookie 三种登录；dy主动 开/关/刷 主动刷视频；dy互动 开/关 互动提醒。详见 README。"
+version: 1.0.0
 author: 心海海
 repo: https://github.com/Xinhaihai-Xinhaihai/astrbot_plugin_douyin_ai_bot
 category: 娱乐
 tags:
   - 抖音
   - 视频
+  - 直播
   - 评论
   - 多模态
+  - 视觉模型
 astrbot_version: ">=4.16,<5"
+social_link: https://github.com/Xinhaihai-Xinhaihai
