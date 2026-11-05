@@ -41,6 +41,7 @@ class SubscriptionStore:
                 self.data = json.loads(self.path.read_text(encoding="utf-8"))
                 self.data.setdefault("subs", {})
                 self.data.setdefault("groups", [])
+                self.data.setdefault("special_ids", [])
             except Exception as e:
                 logger.error("读取订阅数据失败: %s", e)
 
@@ -153,3 +154,23 @@ class SubscriptionStore:
         if sub and room_id:
             sub["room_id"] = room_id
             await self.save()
+
+    # ---------- 特别关心 ----------
+    async def add_special(self, short_id: str) -> bool:
+        short_id = (short_id or "").strip()
+        if not short_id or short_id in self.data["special_ids"]:
+            return False
+        self.data["special_ids"].append(short_id)
+        await self.save()
+        return True
+
+    async def remove_special(self, short_id: str) -> bool:
+        short_id = (short_id or "").strip()
+        if short_id in self.data["special_ids"]:
+            self.data["special_ids"].remove(short_id)
+            await self.save()
+            return True
+        return False
+
+    def all_special(self) -> list[str]:
+        return list(self.data.get("special_ids", []))

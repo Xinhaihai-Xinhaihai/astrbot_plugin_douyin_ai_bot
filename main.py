@@ -1,11 +1,12 @@
-"""抖音 AI 插件：直播开播订阅检测 + 陪看评论（发视频链接→看视频→发像真人的短评）.
+"""抖音 AI 插件：直播开播订阅检测 + 陪看评论 + 主动刷视频 + 互动（私信/评论回复）.
 
 - 直播订阅：`订阅 <抖音号/链接>` / `取消订阅 <key>` / `订阅列表`
 - 转发群：`直播转发 群号` / `取消转发 群号`
-- 每 N 秒轮询全部订阅，开播时推「封面+链接+配文」到转发群
-- 群里说触发词时即时检查并把正在播的主播发回去
 - 陪看评论：`dy评论 <视频链接>` 看视频后发一条像真人的短评，发完截图推群
-- 登录三选一：`dy登录`（本机浏览器扫码）/ `dy_qr`（推二维码图，手机扫）/ `dy_cookie`（贴浏览器整段 Cookie 导入）
+- 主动刷视频：`dy主动 开/关` 定时刷一批视频（特别关心up优先）→ 打分 → 过线才评论 → 分享给主人
+- 口味关键词：`dy口味 <词1,词2>` 打分时加权；特别关心：`dy特别关心 <抖音号>`
+- 互动：`dy互动 开/关` 轮询私信新消息/我发的评论被回复，自动回或提醒主人
+- 登录：`dy登录` / `dy_qr` / `dy_cookie` 三选一（服务器部署推荐 dy_qr 或 dy_cookie）
 """
 
 from __future__ import annotations
@@ -32,8 +33,11 @@ from .core.douyin import (
     parse_aweme_id,
     send_comment,
 )
+from .core.interact import InteractState, get_bot_name, poll_comment_replies, poll_dm_new, send_dm
 from .core.live_checker import DouyinLiveChecker, LiveStatus
+from .core.proactive import SeenStore, fetch_feed_videos, fetch_user_videos
 from .core.screenshot import compose_screenshot
+from .core.score import score_video
 from .core.store import SubscriptionStore
 
 PLUGIN_DIR_NAME = "astrbot_plugin_douyin_ai_bot"
@@ -66,6 +70,14 @@ class DouyinAiBotPlugin(Star):
         self._checker: DouyinLiveChecker | None = None
         self._poll_task: asyncio.Task | None = None
         self._polling = False
+        self._proactive_task: asyncio.Task | None = None
+        self._proactive_running = False
+        self._proactive_busy = False
+        self._interact_task: asyncio.Task | None = None
+        self._interact_running = False
+        self._interact_busy = False
+        self._seen: SeenStore | None = None
+        self._interact_state: InteractState | None = None
         self._trigger_cd: dict[str, float] = {}
         self._platform_id: str = ""
         self._data_dir: Path | None = None
@@ -87,6 +99,8 @@ class DouyinAiBotPlugin(Star):
             self._data_dir.mkdir(parents=True, exist_ok=True)
         self._store = SubscriptionStore(self._data_dir / "douyin_live.json")
         self._cooldown = CooldownStore(self._data_dir / "cooldown.json")
+        self._seen = SeenStore(self._data_dir / "seen_videos.json")
+        self._interact_state = InteractState(self._data_dir / "interact_state.json")
         self._checker = DouyinLiveChecker(
             ttwid=str(self._c("ttwid", "") or ""),
             browser_channel=str(self._c("browser_channel", "msedge") or ""),
@@ -117,9 +131,17 @@ class DouyinAiBotPlugin(Star):
             self._reload_runtime()
         await self._sync_from_config()
         self._start_polling()
+        if self._c("proactive_enabled", False):
+            self._proactive_running = True
+            self._start_proactive()
+        if self._c("interact_enabled", False):
+            self._interact_running = True
+            self._start_interact()
 
     async def terminate(self):
         await self._stop_polling()
+        await self._stop_proactive()
+        await self._stop_interact()
         try:
             if self._checker:
                 await self._checker.close()
@@ -162,6 +184,36 @@ class DouyinAiBotPlugin(Star):
         if self._poll_task and not self._poll_task.done():
             return
         self._poll_task = asyncio.create_task(self._poll_loop())
+
+    def _start_proactive(self):
+        if self._proactive_task and not self._proactive_task.done():
+            return
+        self._proactive_task = asyncio.create_task(self._proactive_loop())
+
+    async def _stop_proactive(self):
+        self._proactive_running = False
+        if self._proactive_task:
+            self._proactive_task.cancel()
+            try:
+                await self._proactive_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._proactive_task = None
+
+    def _start_interact(self):
+        if self._interact_task and not self._interact_task.done():
+            return
+        self._interact_task = asyncio.create_task(self._interact_loop())
+
+    async def _stop_interact(self):
+        self._interact_running = False
+        if self._interact_task:
+            self._interact_task.cancel()
+            try:
+                await self._interact_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._interact_task = None
 
     async def _stop_polling(self):
         if self._poll_task:
@@ -498,6 +550,218 @@ class DouyinAiBotPlugin(Star):
             lines.append(f"登录态检查失败：{e}")
         yield event.plain_result("\n".join(lines))
 
+    # ================= 主动刷视频 =================
+
+    def _taste_words(self) -> list[str]:
+        return _to_list(self._c("taste_words", []))
+
+    def _master_user_id(self) -> str:
+        return str(self._c("master_user_id", "") or "").strip()
+
+    async def _owner_ids(self) -> list[str]:
+        out = []
+        for key, sub in self._store.all_subs():
+            if not key.isdigit() and re.fullmatch(r"[A-Za-z0-9_.]+", key):
+                out.append(key)
+        out.extend(self._store.all_special())
+        return list(dict.fromkeys(out))
+
+    async def _proactive_loop(self):
+        while True:
+            try:
+                await asyncio.sleep(max(300, int(self._c("proactive_interval", 900) or 900)))
+                if not self._proactive_running or self._proactive_busy or not self._enabled():
+                    continue
+                self._proactive_busy = True
+                await self._proactive_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.exception("[douyin_ai] 主动刷异常: %s", e)
+            finally:
+                self._proactive_busy = False
+
+    async def _proactive_once(self):
+        from .browser import DouyinBrowser
+
+        n = max(1, min(10, int(self._c("proactive_batch", 3) or 3)))
+        min_score = float(self._c("score_threshold", 7) or 7)
+        logger.info("[douyin_ai] 主动刷开始：取 %s 个，过线 %.0f 分才评", n, min_score)
+
+        # 收集候选：特别关心 up 优先，其次订阅的 up，最后推荐流
+        candidates: list[tuple[str, bool]] = []  # (aweme_id, is_special)
+        seen_ids: set[str] = set()
+        specials = self._store.all_special()
+        browser = DouyinBrowser.get(profile_dir=self._profile_dir(), headless=True,
+                                    channel=str(self._c("browser_channel", "msedge") or ""))
+        try:
+            for sid in specials:
+                for aid in await fetch_user_videos(sid, 3, browser):
+                    if aid not in seen_ids:
+                        seen_ids.add(aid)
+                        candidates.append((aid, True))
+            owner_ids = [k for k in await self._owner_ids() if k not in specials]
+            for sid in owner_ids[:5]:
+                for aid in await fetch_user_videos(sid, 3, browser):
+                    if aid not in seen_ids and len(candidates) < n * 3:
+                        seen_ids.add(aid)
+                        candidates.append((aid, False))
+            if len(candidates) < n:
+                for aid in await fetch_feed_videos(n * 2, browser):
+                    if aid not in seen_ids and len(candidates) < n * 3:
+                        seen_ids.add(aid)
+                        candidates.append((aid, False))
+        except Exception as e:
+            logger.warning("[douyin_ai] 收集候选失败: %s", e)
+
+        picked = 0
+        for aweme_id, is_special in candidates:
+            if picked >= n:
+                break
+            if self._seen and (self._seen.is_seen(aweme_id) or self._seen.is_commented(aweme_id)):
+                continue
+            self._seen.mark_seen(aweme_id)
+            picked += 1
+            logger.info("[douyin_ai] 主动看视频 %s（特别关心=%s）", aweme_id, is_special)
+            try:
+                vc = await fetch_video(aweme_id, int(self._c("frame_count", 6) or 6))
+            except Exception as e:
+                logger.warning("[douyin_ai] 拉取 %s 失败: %s", aweme_id, e)
+                continue
+            score, reason = 0, ""
+            try:
+                score, reason = await score_video(vc, self._taste_words(), is_special, self.context, self.cfg)
+            except Exception as e:
+                logger.warning("[douyin_ai] 评分 %s 失败: %s", aweme_id, e)
+            logger.info("[douyin_ai] %s 打分 %.0f（%s）", vc.title[:20], score, reason)
+
+            if score < min_score:
+                from .douyin import cleanup
+                cleanup(vc)
+                continue
+
+            # 过线：评论 + 分享
+            comment_text = ""
+            if self._c("proactive_comment", True):
+                try:
+                    comment_text = await generate_comment(vc, str(self._c("comment_style", "") or ""), self.context, self.cfg)
+                except Exception:
+                    pass
+            sent = False
+            if comment_text:
+                try:
+                    if await is_logged_in():
+                        from .douyin import send_comment
+                        gleft = self._cooldown.in_global_cooldown(float(self._c("global_cooldown_minutes", 0) or 0))
+                        if gleft <= 0:
+                            await send_comment(aweme_id, comment_text)
+                            sent = True
+                            self._cooldown.mark(aweme_id)
+                            self._seen.mark_commented(aweme_id, score, comment_text)
+                except Exception as e:
+                    logger.warning("[douyin_ai] 主动评论失败: %s", e)
+
+            # 截图 + 分享主人
+            shot = await compose_screenshot(
+                cover_url=vc.cover, frames=list(vc.frames), title=vc.title or "（标题没抓到）",
+                owner=vc.owner, bvid=aweme_id, comment=comment_text, stat=vc.stat,
+                top_comments=list(vc.top_comments), link=vc.page_url, meta_prefix="作者",
+            )
+            chain = MessageChain()
+            if shot and Path(shot).exists():
+                chain.image(fix_type="local", url=shot)
+            chain.message(
+                f"主动刷到《{vc.title or '视频'}》\n"
+                f"打分 {score:.0f}/10（{reason}）\n"
+                + (f"评论已发：{comment_text}\n" if sent else "没评论\n")
+                + vc.page_url
+            )
+            await self._share_to_master(chain, aweme_id)
+            from .douyin import cleanup
+            cleanup(vc)
+
+    async def _share_to_master(self, chain: MessageChain, aweme_id: str):
+        """推给主人私聊；没配主人就推到 notify_groups。"""
+        master = self._master_user_id()
+        if master:
+            try:
+                pid = self._platform_id or "default"
+                await self.context.send_message(f"{pid}:FriendMessage:{master}", chain)
+                return
+            except Exception as e:
+                logger.warning("[douyin_ai] 推主人失败: %s", e)
+        for gid in [g for g in _to_list(self._c("notify_groups", [])) if g.isdigit()]:
+            try:
+                await self._send_to_group(gid, chain)
+            except Exception:
+                pass
+
+    # ================= 互动轮询 =================
+
+    async def _interact_loop(self):
+        while True:
+            try:
+                await asyncio.sleep(max(120, int(self._c("interact_interval", 300) or 300)))
+                if not self._interact_running or self._interact_busy or not self._enabled():
+                    continue
+                self._interact_busy = True
+                await self._interact_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.exception("[douyin_ai] 互动轮询异常: %s", e)
+            finally:
+                self._interact_busy = False
+
+    async def _interact_once(self):
+        from .browser import DouyinBrowser
+
+        try:
+            browser = DouyinBrowser.get(profile_dir=self._profile_dir(), headless=True,
+                                        channel=str(self._c("browser_channel", "msedge") or ""))
+        except Exception as e:
+            logger.warning("[douyin_ai] 互动开浏览器失败: %s", e)
+            return
+        if not await is_logged_in():
+            logger.info("[douyin_ai] 未登录，跳过互动轮询")
+            return
+
+        # 0) 补自己昵称
+        if not self._interact_state.data.get("bot_name"):
+            try:
+                name = await get_bot_name(browser)
+                if name:
+                    self._interact_state.data["bot_name"] = name
+                    self._interact_state.save()
+            except Exception:
+                pass
+
+        # 1) 私信
+        if self._c("dm_notify", True):
+            try:
+                news = await poll_dm_new(browser, self._interact_state)
+                for m in news:
+                    chain = MessageChain().message(
+                        f"私信提醒：{m['conv_name']}\n{m['text']}\n（dy互动 私信回复 <内容> 可回 ta）"
+                    )
+                    await self._share_to_master(chain, "dm")
+            except Exception as e:
+                logger.warning("[douyin_ai] 私信轮询失败: %s", e)
+
+        # 2) 评论被回复
+        if self._c("reply_notify", True) and self._seen:
+            try:
+                recent = [k for k, _ in self._seen.recent_commented(5)]
+                replies = await poll_comment_replies(browser, recent, self._interact_state)
+                for r in replies:
+                    chain = MessageChain().message(
+                        f"有人回复你的评论啦：{r['replier']} 说「{r['text']}」\n"
+                        f"视频：{r['aweme_id']}"
+                    )
+                    await self._share_to_master(chain, "reply")
+            except Exception as e:
+                logger.warning("[douyin_ai] 评论回复轮询失败: %s", e)
+
     # ================= 触发词监听 =================
 
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -589,3 +853,145 @@ class DouyinAiBotPlugin(Star):
     async def cmd_trigger_list(self, event: AstrMessageEvent):
         words = self._trigger_words()
         yield event.plain_result("触发词：" + "、".join(words) if words else "还没配触发词（添加触发词 <词>）")
+
+    # ================= 主动刷视频命令 =================
+
+    @filter.command("dy主动", alias={"抖音主动", "主动刷", "dy刷视频"})
+    async def cmd_proactive(self, event: AstrMessageEvent, raw: str = ""):
+        self._remember_platform(event)
+        raw = (raw or "").strip()
+        if raw in ("开", "启动", "on"):
+            self._c_set("proactive_enabled", True)
+            self._proactive_running = True
+            self._start_proactive()
+            yield event.plain_result(f"主动刷已开启：每 {int(self._c('proactive_interval', 900)) // 60} 分钟刷 {self._c('proactive_batch', 3)} 个，打分 ≥{self._c('score_threshold', 7)} 才评论，过线推给你")
+            return
+        if raw in ("关", "关闭", "off"):
+            self._c_set("proactive_enabled", False)
+            await self._stop_proactive()
+            yield event.plain_result("主动刷已关闭")
+            return
+        if raw in ("刷", "现在", "now"):
+            if self._proactive_busy:
+                yield event.plain_result("正在刷，等一下")
+                return
+            if not self._c("comment_enabled", True):
+                yield event.plain_result("陪看评论已停用")
+                return
+            yield event.plain_result("开刷了，稍等（下载+打分+评论，几分钟）…")
+            self._proactive_busy = True
+            try:
+                await self._proactive_once()
+                yield event.plain_result("刷完一轮了，过线的都推过了（没推就是都没过线）")
+            finally:
+                self._proactive_busy = False
+            return
+        yield event.plain_result("用法：dy主动 开 / 关 / 刷（刷=立即跑一轮）")
+
+    def _c_set(self, key: str, value: Any):
+        try:
+            self.cfg[key] = value
+            self.cfg.save_config()
+        except Exception:
+            pass
+
+    @filter.command("dy口味", alias={"抖音口味", "口味"})
+    async def cmd_taste(self, event: AstrMessageEvent, raw: str = ""):
+        self._remember_platform(event)
+        raw = (raw or "").strip()
+        if not raw:
+            cur = self._taste_words()
+            yield event.plain_result("当前口味：" + ("、".join(cur) if cur else "没设（打分走通用标准）"))
+            return
+        words = [w.strip() for w in re.split(r"[,，、\s]+", raw) if w.strip()]
+        self._c_set("taste_words", words)
+        yield event.plain_result(f"口味已更新：{'、'.join(words)}（打分时匹配这些主题的会加分）")
+
+    @filter.command("dy特别关心", alias={"抖音特别关心", "特别关心"})
+    async def cmd_special(self, event: AstrMessageEvent, raw: str = ""):
+        self._remember_platform(event)
+        raw = (raw or "").strip()
+        if not raw:
+            sp = self._store.all_special()
+            yield event.plain_result("特别关心：" + ("、".join(sp) if sp else "没设") + "\n（用法：dy特别关心 <抖音号> / 删 <抖音号>）")
+            return
+        if raw.startswith("删"):
+            target = raw[1:].strip()
+            ok = await self._store.remove_special(target)
+            yield event.plain_result(f"已移除 {target}" if ok else "特别关心里没有这个")
+            return
+        if not re.fullmatch(r"[A-Za-z0-9_.]+", raw) or raw.isdigit():
+            yield event.plain_result("要填抖音号（如 Lianmin726），别填名字")
+            return
+        await self._store.add_special(raw)
+        yield event.plain_result(f"已特别关心 {raw}：主动刷时优先看 ta 的新视频，打分 +1 保底，过线推给你")
+
+    @filter.command("dy主人", alias={"抖音主人", "设主人"})
+    async def cmd_master(self, event: AstrMessageEvent, raw: str = ""):
+        self._remember_platform(event)
+        raw = (raw or "").strip()
+        if not raw:
+            yield event.plain_result("当前主人 QQ：" + (self._master_user_id() or "没设") + "\n（用法：dy主人 <QQ号> 主动刷过线/互动提醒都推给 ta）")
+            return
+        if not raw.isdigit():
+            yield event.plain_result("要填 QQ 号数字")
+            return
+        self._c_set("master_user_id", raw)
+        yield event.plain_result(f"主人设为 {raw}，过线视频和私信/回复提醒都推 ta 的私聊")
+
+    # ================= 互动命令 =================
+
+    @filter.command("dy互动", alias={"抖音互动", "互动开关"})
+    async def cmd_interact(self, event: AstrMessageEvent, raw: str = ""):
+        self._remember_platform(event)
+        raw = (raw or "").strip()
+        if raw in ("开", "启动", "on"):
+            self._c_set("interact_enabled", True)
+            self._interact_running = True
+            self._start_interact()
+            yield event.plain_result(f"互动已开启：每 {int(self._c('interact_interval', 300)) // 60} 分钟轮询一次，新私信/评论被回复都推给主人")
+            return
+        if raw in ("关", "关闭", "off"):
+            self._c_set("interact_enabled", False)
+            await self._stop_interact()
+            yield event.plain_result("互动已关闭")
+            return
+        m = re.match(r"^私信回复[:：]?\s*(.+)$", raw)
+        if m:
+            text = m.group(1).strip()
+            if not text:
+                yield event.plain_result("要回什么内容？")
+                return
+            # 找到最近一条私信会话
+            recent = sorted(self._interact_state.data.get("seen_conv_ts", {}).items(), key=lambda x: x[1], reverse=True)
+            if not recent:
+                yield event.plain_result("没看到私信会话记录，等互动轮过一次再用")
+                return
+            conv_name = recent[0][0]
+            ok = await self._send_dm_to(conv_name, text)
+            yield event.plain_result(f"已回 {conv_name}：{text}" if ok else "没发出去（可能没登录或会话找不到了）")
+            return
+        yield event.plain_result("用法：dy互动 开 / 关 / 私信回复 <内容>")
+
+    async def _send_dm_to(self, conv_name: str, text: str) -> bool:
+        from .browser import DouyinBrowser
+        try:
+            browser = DouyinBrowser.get(profile_dir=self._profile_dir(), headless=True,
+                                        channel=str(self._c("browser_channel", "msedge") or ""))
+            return await send_dm(browser, conv_name, text)
+        except Exception as e:
+            logger.warning("[douyin_ai] 发私信异常: %s", e)
+            return False
+
+    @filter.command("dy刷状态", alias={"刷状态"})
+    async def cmd_proactive_status(self, event: AstrMessageEvent):
+        lines = [
+            f"主动刷：{'开' if self._proactive_running else '关'}（间隔 {int(self._c('proactive_interval', 900)) // 60} 分钟，每轮 {self._c('proactive_batch', 3)} 个，过线 {self._c('score_threshold', 7)} 分）",
+            f"口味：{'、'.join(self._taste_words()) or '无'}",
+            f"特别关心：{'、'.join(self._store.all_special()) or '无'}",
+            f"主人 QQ：{self._master_user_id() or '未设'}",
+            f"互动：{'开' if self._interact_running else '关'}（间隔 {int(self._c('interact_interval', 300)) // 60} 分钟）",
+        ]
+        if self._seen:
+            lines.append(f"历史：看过 {len(self._seen._data.get('seen', {}))} 个，评过 {len(self._seen._data.get('commented', {}))} 个")
+        yield event.plain_result("\n".join(lines))
