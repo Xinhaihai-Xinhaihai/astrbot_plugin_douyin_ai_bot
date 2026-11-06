@@ -464,24 +464,15 @@ class DouyinAiBotPlugin(Star):
             )
             status = "已发出评论" if sent else f"评论未发出（{err}）"
 
-            # 推送到 notify_groups 群
-            groups = [g for g in _to_list(self._c("notify_groups", [])) if g.isdigit()]
-            pushed = []
-            for gid in groups:
-                try:
-                    chain = MessageChain()
-                    if shot and Path(shot).exists():
-                        chain.image(fix_type="local", url=shot)
-                    chain.message(f"《{title}》\n{status}\n评论：{comment_text}\n{vc.page_url}")
-                    await self._send_to_group(gid, chain)
-                    pushed.append(gid)
-                except Exception as e:
-                    logger.warning("[douyin_ai] 推送群 %s 失败: %s", gid, e)
-
-            tail = f"截图已推送到群：{'、'.join(pushed)}" if pushed else "没配推送群（notify_groups）"
-            reply_chain = MessageChain()
+            # 截图推转发群（和主动刷过线同一个出口）
+            chain = MessageChain()
             if shot and Path(shot).exists():
-                reply_chain.image(fix_type="local", url=shot)
+                chain.image(fix_type="local", url=shot)
+            chain.message(f"《{title}》\n{status}\n评论：{comment_text}\n{vc.page_url}")
+            pushed = await self._share_to_master(chain, aweme_id)
+
+            tail = f"截图已推送到群：{'、'.join(pushed)}" if pushed else "没配推送群（直播转发 <群号>）"
+            reply_chain = MessageChain()
             reply_chain.message(f"《{title}》\n{status}\n评论：{comment_text}\n{tail}")
             yield reply_chain
 
@@ -730,23 +721,25 @@ class DouyinAiBotPlugin(Star):
             except Exception as e:
                 logger.warning("[douyin_ai] 本轮打分汇总推送失败: %s", e)
 
-    async def _share_to_master(self, chain: MessageChain, aweme_id: str):
-        """推直播转发群（forward_groups）；没配再退回 notify_groups。"""
-        groups = [g for g in _to_list(self._c("forward_groups", [])) if g.isdigit()]
-        pushed = []
+    async def _share_to_master(self, chain: MessageChain, aweme_id: str) -> list[str]:
+        """推直播转发群（forward_groups）；没配再退回 notify_groups。返回推成功的群号列表。"""
+        groups: list[str] = []
+        for g in _to_list(self._c("forward_groups", [])):
+            g = g.strip()
+            if g.isdigit() and g not in groups:
+                groups.append(g)
+        for g in _to_list(self._c("notify_groups", [])):
+            g = g.strip()
+            if g.isdigit() and g not in groups:
+                groups.append(g)
+        pushed: list[str] = []
         for gid in groups:
             try:
                 await self._send_to_group(gid, chain)
                 pushed.append(gid)
             except Exception as e:
-                logger.warning("[douyin_ai] 转发群 %s 推送失败: %s", gid, e)
-        if pushed:
-            return
-        for gid in [g for g in _to_list(self._c("notify_groups", [])) if g.isdigit()]:
-            try:
-                await self._send_to_group(gid, chain)
-            except Exception:
-                pass
+                logger.warning("[douyin_ai] 群 %s 推送失败: %s", gid, e)
+        return pushed
 
     # ================= 互动轮询 =================
 
