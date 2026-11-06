@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 import time
 from pathlib import Path
@@ -22,17 +21,28 @@ from astrbot.api import logger
 
 from .douyin import DouyinVideoContent, fetch_video, parse_aweme_id
 
-logger = logging.getLogger(__name__)
-
 _AWEME_RE = re.compile(r"/video/(\d{15,21})")
 
 
-async def fetch_user_videos(short_id: str, count: int = 5, browser=None) -> list[str]:
-    """抓某个抖音号主页最新 N 个视频 aweme_id."""
-    from .browser import DouyinBrowser
+# 兜底：抖音视频 ID 在 HTML 正文里，但不一定挂在 <a href> 上（首页推荐流卡片就是）
+_HTML_ID_JS = r"""() => {
+  const html = document.documentElement.innerHTML || "";
+  const out = new Set();
+  const re = /\/video\/(\d{15,21})/g;
+  let m;
+  while ((m = re.exec(html)) !== null) out.add(m[1]);
+  return [...out];
+}"""
 
-    own = browser is None
-    b = browser or DouyinBrowser.get(headless=True)
+
+async def fetch_user_videos(short_id: str, count: int = 5, browser=None) -> list[str]:
+    """抓某个抖音号主页最新 N 个视频 aweme_id. browser 必须传入（保证 channel 正确）。"""
+    if browser is None:
+        return []
+    if not re.fullmatch(r"[A-Za-z0-9_.\-]+", short_id or ""):
+        logger.warning("[douyin_ai] 订阅键 %r 不是抖音号（直播间号抓不到主页），跳过", short_id)
+        return []
+    b = browser
     page = None
     try:
         page = await b.new_page(home=False)
@@ -51,12 +61,15 @@ async def fetch_user_videos(short_id: str, count: int = 5, browser=None) -> list
               return out;
             }"""
         )
+        if not ids:
+            # 链接选择器抓不到时，从 HTML 正文兜底（只取正文，排除 nav 里的无关链接）
+            ids = await page.evaluate(_HTML_ID_JS)
         return list(ids[:count])
     except Exception as e:
         logger.warning(f"[douyin_ai] 抓 {short_id} 作品失败: {e}")
         return []
     finally:
-        if own and page is not None:
+        if page is not None:
             try:
                 await b.close_page(page)
             except Exception:
@@ -64,11 +77,10 @@ async def fetch_user_videos(short_id: str, count: int = 5, browser=None) -> list
 
 
 async def fetch_feed_videos(count: int = 5, browser=None) -> list[str]:
-    """登录态刷推荐流，抓 N 个视频 aweme_id."""
-    from .browser import DouyinBrowser
-
-    own = browser is None
-    b = browser or DouyinBrowser.get(headless=True)
+    """登录态刷推荐流，抓 N 个视频 aweme_id. browser 必须传入（保证 channel 正确）。"""
+    if browser is None:
+        return []
+    b = browser
     page = None
     try:
         page = await b.new_page(home=True)
@@ -77,16 +89,7 @@ async def fetch_feed_videos(count: int = 5, browser=None) -> list[str]:
         for _ in range(count // 2 + 2):
             await page.evaluate("window.scrollBy(0, 1500)")
             await page.wait_for_timeout(2000)
-            ids = await page.evaluate(
-                r"""() => {
-                  const out = [];
-                  for (const a of document.querySelectorAll('a[href*="/video/"]')) {
-                    const m = a.href.match(/\/video\/(\d{15,21})/);
-                    if (m && !out.includes(m[1])) out.push(m[1]);
-                  }
-                  return out;
-                }"""
-            )
+            ids = await page.evaluate(_HTML_ID_JS)
             for i in ids:
                 if i not in seen:
                     seen.append(i)
@@ -99,7 +102,7 @@ async def fetch_feed_videos(count: int = 5, browser=None) -> list[str]:
         logger.warning(f"[douyin_ai] 抓推荐流失败: {e}")
         return []
     finally:
-        if own and page is not None:
+        if page is not None:
             try:
                 await b.close_page(page)
             except Exception:

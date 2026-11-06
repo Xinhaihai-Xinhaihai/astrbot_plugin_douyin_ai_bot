@@ -1,6 +1,14 @@
 # 更新日志
 
-## v1.1.2
+## v1.3.0
+- 修复：推荐流/用户主页抓不到视频 ID 的问题——抖音首页卡片链接不挂在 `<a href>` 上，增加 HTML 正文正则兜底（`/video/(\d{15,21})`），登录态正常时稳定出候选
+
+## v1.2.0
+- 修复：7 个 core 模块 logger 统一改为 `from astrbot.api import logger`（审核驳回项）
+- 修复：浏览器 channel 降级失败时抛真实错误，不再静默吞异常
+- 调整：订阅流/推荐流候选收集拆成独立 try/except，推荐流挂了不影响订阅抓取
+- 新增：候选为空时推群提示「可能登录态掉了，试试 dy_qr」
+- 调整：`fetch_feed_videos` / `fetch_user_videos` 必须由调用方传入带 channel 的浏览器实例，禁止内部裸建（修 headless chromium 找不到崩溃）
 - 调整：`dy评论` 截图改推转发群（`forward_groups`），私聊只回一行文字确认，不再每天私聊塞图
 - 调整：所有群推送统一走 forward_groups → notify_groups 兜底（dy评论 / 主动刷过线 / 打分汇总 / 互动提醒 同一出口）
 
