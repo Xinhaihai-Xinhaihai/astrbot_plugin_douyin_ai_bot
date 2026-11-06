@@ -979,17 +979,17 @@ class DouyinAiBotPlugin(Star):
 
     @filter.command("dy主人", alias={"抖音主人", "设主人"})
     async def cmd_master(self, event: AstrMessageEvent, raw: str = ""):
-        """设置备用主人 QQ 号：转发群没配置时，提醒/截图会推给 ta 的私聊。"""
+        """设置主人 QQ 号（备用标识；推送统一走转发群，不私聊）。"""
         self._remember_platform(event)
         raw = (raw or "").strip()
         if not raw:
-            yield event.plain_result("当前主人 QQ：" + (self._master_user_id() or "没设") + "\n（用法：dy主人 <QQ号> 主动刷过线/互动提醒都推给 ta）")
+            yield event.plain_result("当前主人 QQ：" + (self._master_user_id() or "没设") + "\n（用法：dy主人 <QQ号> 推送都走转发群）")
             return
         if not raw.isdigit():
             yield event.plain_result("要填 QQ 号数字")
             return
         self._c_set("master_user_id", raw)
-        yield event.plain_result(f"主人设为 {raw}，过线视频和私信/回复提醒都推 ta 的私聊")
+        yield event.plain_result(f"主人设为 {raw}")
 
     # ================= 互动命令 =================
 
