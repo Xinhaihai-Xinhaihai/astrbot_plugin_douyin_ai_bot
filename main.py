@@ -660,7 +660,7 @@ class DouyinAiBotPlugin(Star):
             round_entries.append({
                 "aweme_id": aweme_id, "title": vc.title, "owner": vc.owner,
                 "special": is_special, "score": score, "reason": reason,
-                "liked": False, "link": vc.page_url, "threshold": min_score,
+"liked": False, "link": vc.page_url, "threshold": min_score,
             })
 
             if score < min_score:
@@ -708,7 +708,7 @@ class DouyinAiBotPlugin(Star):
             from .core.douyin import cleanup
             cleanup(vc)
 
-        # 本轮打分汇总：每轮刷完都推一张完整评分统计（过线的也在卡里标出来）
+# 本轮打分汇总：每轮刷完都推一张完整评分统计（过线的也在卡里标出来）
         if round_entries:
             try:
                 shot = await compose_score_card(round_entries)
