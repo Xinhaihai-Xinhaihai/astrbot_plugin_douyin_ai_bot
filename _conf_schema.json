@@ -26,7 +26,7 @@
     "description": "转发群号",
     "type": "list",
     "default": [],
-    "hint": "主播开播时推送到这些群的群号（QQ 群号数字）。"
+    "hint": "主推送群：主播开播、dy评论截图、主动刷过线、本轮打分汇总、私信/评论回复提醒全推到这些群（QQ 群号数字，下方逐个添加）。"
   },
   "reply_text": {
     "description": "开播配文",
@@ -93,10 +93,10 @@
     "hint": "任意两次评论之间的最少间隔，模拟真人不密集发言。"
   },
   "notify_groups": {
-    "description": "评论截图推送群号",
+    "description": "备用推送群号",
     "type": "list",
     "default": [],
-    "hint": "每次发完评论后，把「视频+评论」截图推送到这些群。填 QQ 群号数字，在下方逐个添加。留空则只发给触发命令的人。"
+    "hint": "forward_groups 没配时的兜底推送群（QQ 群号数字，下方逐个添加）。正常只填 forward_groups 就行。"
   },
 
   "_vision_section": {
@@ -196,7 +196,7 @@
     "description": "主人 QQ 号",
     "type": "string",
     "default": "",
-    "hint": "主动刷过线视频、私信提醒、评论被回复，都推给这个 QQ 的私聊。"
+    "hint": "主人 QQ 号（备用标识）。推送统一走 forward_groups 群，不再私聊。"
   },
 
   "_interact_section": {

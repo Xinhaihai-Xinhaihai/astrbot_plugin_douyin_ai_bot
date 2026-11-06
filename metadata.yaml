@@ -1,4 +1,4 @@
-name: astrbot_plugin_douyin_ai_bot
+﻿name: astrbot_plugin_douyin_ai_bot
 display_name: 抖音AI陪看
 desc: |
   抖音直播订阅检测 + AI 陪看评论 + 主动刷视频。
@@ -9,7 +9,7 @@ desc: |
   不点赞、不刷量，评论频率受同视频冷却+全局间隔双重限制。
 short_desc: 抖音直播检测+AI看视频发评论+主动刷
 help: "dy评论 <视频链接> 看视频发短评推截图；订阅 <抖音号/链接> 订阅直播；dy登录/dy_qr/dy_cookie 三种登录；dy主动 开/关/刷 主动刷视频；dy互动 开/关 互动提醒。详见 README。"
-version: 1.0.0
+version: 1.2.0
 author: 心海海
 repo: https://github.com/Xinhaihai-Xinhaihai/astrbot_plugin_douyin_ai_bot
 category: 娱乐
@@ -22,3 +22,4 @@ tags:
   - 视觉模型
 astrbot_version: ">=4.16,<5"
 social_link: https://github.com/Xinhaihai-Xinhaihai
+
