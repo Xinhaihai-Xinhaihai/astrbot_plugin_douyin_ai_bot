@@ -129,9 +129,19 @@ class SeenStore:
 
     def _save(self):
         # 裁剪：seen 只留 30 天，commented 留 365 天
+        # 注意：seen 的值是时间戳 float；commented 的值是 dict（{"ts","score","comment"}），取 ts 才能减
         now = time.time()
-        self._data["seen"] = {k: v for k, v in self._data["seen"].items() if now - v < 30 * 86400}
-        self._data["commented"] = {k: v for k, v in self._data["commented"].items() if now - v < 365 * 86400}
+        seen_clean = {}
+        for k, v in self._data["seen"].items():
+            if isinstance(v, (int, float)) and now - v < 30 * 86400:
+                seen_clean[k] = v
+        self._data["seen"] = seen_clean
+        commented_clean = {}
+        for k, v in self._data["commented"].items():
+            ts = v.get("ts") if isinstance(v, dict) else v
+            if isinstance(ts, (int, float)) and now - ts < 365 * 86400:
+                commented_clean[k] = v
+        self._data["commented"] = commented_clean
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")

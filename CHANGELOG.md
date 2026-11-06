@@ -1,5 +1,8 @@
 # 更新日志
 
+## v1.3.2
+- 修复：主动刷视频过线触发 `dy主动 刷` 崩（`unsupported operand type(s) for -: 'float' and 'dict'`）——`SeenStore._save` 裁剪时 `commented` 存的是 `{"ts","score","comment"}` dict，直接和 `time.time()` 相减炸了，现在按 `ts` 取时间戳裁剪，顺便兼容脏数据
+
 ## v1.3.1
 - 修复：新版 AstrBot 的 `MessageChain` 没有 `.image()` 方法导致 `dy主动` 等命令直接崩（`'MessageChain' object has no attribute 'image'`），7 处全部换成新 API：本地图 `file_image()`、网图 `url_image()`
 
