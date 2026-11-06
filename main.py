@@ -591,7 +591,8 @@ class DouyinAiBotPlugin(Star):
     async def _proactive_loop(self):
         while True:
             try:
-                await asyncio.sleep(max(300, int(self._c("proactive_interval", 900) or 900)))
+                # proactive_interval 单位是分钟（1.3.4 起），兑底最少 3 分钟
+                await asyncio.sleep(max(180, self._interval_minutes() * 60))
                 if not self._proactive_running or self._proactive_busy or not self._enabled():
                     continue
                 self._proactive_busy = True
@@ -930,7 +931,7 @@ class DouyinAiBotPlugin(Star):
             self._c_set("proactive_enabled", True)
             self._proactive_running = True
             self._start_proactive()
-            yield event.plain_result(f"主动刷已开启：每 {int(self._c('proactive_interval', 900)) // 60} 分钟刷 {self._c('proactive_batch', 3)} 个，打分 ≥{self._c('score_threshold', 7)} 才评论，过线推给你")
+            yield event.plain_result(f"主动刷已开启：每 {self._interval_minutes()} 分钟刷 {self._c('proactive_batch', 3)} 个，打分 ≥{self._c('score_threshold', 7)} 才评论，过线推给你")
             return
         if raw in ("关", "关闭", "off"):
             self._c_set("proactive_enabled", False)
@@ -953,6 +954,16 @@ class DouyinAiBotPlugin(Star):
                 self._proactive_busy = False
             return
         yield event.plain_result("用法：dy主动 开 / 关 / 刷（刷=立即跑一轮）")
+
+    def _interval_minutes(self, default: int = 15) -> int:
+        """主动刷间隔，单位分钟。兼容 1.3.4 前旧配置存的秒值（>1440 视为秒，自动折算）。"""
+        try:
+            v = int(self._c("proactive_interval", default) or default)
+        except Exception:
+            return default
+        if v > 1440:
+            v = v // 60
+        return max(1, v)
 
     def _c_set(self, key: str, value: Any):
         try:
@@ -1057,7 +1068,7 @@ class DouyinAiBotPlugin(Star):
     async def cmd_proactive_status(self, event: AstrMessageEvent):
         """查看主动刷/互动/口味/特别关心/主人 配置一览。"""
         lines = [
-            f"主动刷：{'开' if self._proactive_running else '关'}（间隔 {int(self._c('proactive_interval', 900)) // 60} 分钟，每轮 {self._c('proactive_batch', 3)} 个，过线 {self._c('score_threshold', 7)} 分）",
+            f"主动刷：{'开' if self._proactive_running else '关'}（间隔 {self._interval_minutes()} 分钟，每轮 {self._c('proactive_batch', 3)} 个，过线 {self._c('score_threshold', 7)} 分）",
             f"口味：{'、'.join(self._taste_words()) or '无'}",
             f"特别关心：{'、'.join(self._store.all_special()) or '无'}",
             f"主人 QQ：{self._master_user_id() or '未设'}",

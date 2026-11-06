@@ -38,7 +38,7 @@
 
 ## 主动刷视频原理
 
-1. 每 `proactive_interval` 秒跑一轮，每轮最多看 `proactive_batch` 个
+1. 每 `proactive_interval` 分钟跑一轮，每轮最多看 `proactive_batch` 个
 2. 候选来源优先级：**特别关心 up 的最新作品** → 已订阅 up 的作品 → 登录态推荐流
 3. 去重：看过 / 评过的视频（seen_videos.json，保留 30 天）不再看
 4. 逐个 `fetch_video` 后调视觉模型打 **0-10 分**（内容质量 + 口味关键词匹配 + 热评质量，特别关心 up 保底 +1）
@@ -132,7 +132,7 @@
 **主动刷视频**
 
 - `proactive_enabled`：主动刷开关（也可 `dy主动 开/关`）
-- `proactive_interval`：轮询间隔秒（默认 900）
+- `proactive_interval`：轮询间隔**分钟**（默认 15；旧配置存的秒值 >1440 会自动折算，1.3.4 起单位从秒改为分钟）
 - `proactive_batch`：每轮看几个（默认 3）
 - `score_threshold`：评论打分门槛 0-10（默认 7，0=全评）
 - `proactive_comment`：过线后是否自动评论（关=只分享不评）

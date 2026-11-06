@@ -143,21 +143,22 @@ async def compose_screenshot(
     # ---------- 封面（居中圆角，新版相框白区矮，封面压小一点） ----------
     cover_h = int(tw * 9 / 16 * 0.62)
     cover_img = None
-    tmp = Path(tempfile.mktemp(suffix=".jpg"))
-    if cover_url and await _download_image(cover_url, tmp):
+    # 抽帧优先：接口拿到的 cover 可能是抖音占位图（三条视频同一张），首帧才是该视频的
+    for f in frames or []:
         try:
-            cover_img = Image.open(tmp).convert("RGB")
+            cover_img = Image.open(f).convert("RGB")
+            break
         except Exception:
-            cover_img = None
-        finally:
-            tmp.unlink(missing_ok=True)
-    if cover_img is None:
-        for f in frames or []:
+            continue
+    if cover_img is None and cover_url:
+        tmp = Path(tempfile.mktemp(suffix=".jpg"))
+        if await _download_image(cover_url, tmp):
             try:
-                cover_img = Image.open(f).convert("RGB")
-                break
+                cover_img = Image.open(tmp).convert("RGB")
             except Exception:
-                continue
+                cover_img = None
+            finally:
+                tmp.unlink(missing_ok=True)
     if cover_img is None:
         cover_img = Image.new("RGB", (tw, cover_h), (216, 228, 244))
 

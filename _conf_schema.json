@@ -160,11 +160,11 @@
     "hint": "开启后定时刷一批视频（特别关心up优先），打分过线才评论，过线推给主人。也可群里 dy主动 开/关。"
   },
   "proactive_interval": {
-    "description": "主动刷间隔（秒）",
+    "description": "主动刷间隔（分钟）",
     "type": "int",
-    "default": 900,
-    "slider": {"min": 300, "max": 86400, "step": 300},
-    "hint": "每 N 秒刷一轮。建议 900（15分钟）~3600（1小时）。"
+    "default": 15,
+    "slider": {"min": 1, "max": 1440, "step": 1},
+    "hint": "每 N 分钟刷一轮。建议 15~60。"
   },
   "proactive_batch": {
     "description": "每轮刷几个视频",
