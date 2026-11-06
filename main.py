@@ -294,7 +294,7 @@ class DouyinAiBotPlugin(Star):
         chain = MessageChain()
         if status.cover:
             try:
-                chain.image(fix_type="online", url=status.cover)
+                chain.url_image(status.cover)
             except Exception:
                 pass
         chain.message(text)
@@ -467,7 +467,7 @@ class DouyinAiBotPlugin(Star):
             # 截图推转发群（和主动刷过线同一个出口）
             chain = MessageChain()
             if shot and Path(shot).exists():
-                chain.image(fix_type="local", url=shot)
+                chain.file_image(shot)
             chain.message(f"《{title}》\n{status}\n评论：{comment_text}\n{vc.page_url}")
             pushed = await self._share_to_master(chain, aweme_id)
 
@@ -506,7 +506,7 @@ class DouyinAiBotPlugin(Star):
                 return
             shot = self._data_dir / "dy_login_qr.png"
             shot.write_bytes(qr)
-            yield MessageChain().image(fix_type="local", url=str(shot)).message("扫这个码（150 秒有效）")
+            yield MessageChain().file_image(str(shot)).message("扫这个码（150 秒有效）")
             return
         yield event.plain_result("拉起浏览器了，用手机抖音扫一下码（180 秒超时）…")
         ok = await wait_for_login(self._profile_dir(), channel=str(self._c("browser_channel", "msedge") or ""), timeout=180)
@@ -554,7 +554,7 @@ class DouyinAiBotPlugin(Star):
         try:
             shot = self._data_dir / "dy_login_qr.png"
             shot.write_bytes(qr)
-            yield MessageChain().image(fix_type="local", url=str(shot)).message("用抖音扫这个码（150 秒有效），扫完自动落盘。看不清就 dy登录 走本机浏览器")
+            yield MessageChain().file_image(str(shot)).message("用抖音扫这个码（150 秒有效），扫完自动落盘。看不清就 dy登录 走本机浏览器")
         except Exception as e:
             yield event.plain_result(f"二维码发送失败：{e}，换 dy登录 吧")
 
@@ -712,7 +712,7 @@ class DouyinAiBotPlugin(Star):
             )
             chain = MessageChain()
             if shot and Path(shot).exists():
-                chain.image(fix_type="local", url=shot)
+                chain.file_image(shot)
             chain.message(
                 f"主动刷到《{vc.title or '视频'}》\n"
                 f"打分 {score:.0f}/10（{reason}）\n"
@@ -731,7 +731,7 @@ class DouyinAiBotPlugin(Star):
                     top = max(e.get("score", 0) for e in round_entries)
                     passed_n = sum(1 for e in round_entries if e.get("score", 0) >= min_score)
                     chain = MessageChain()
-                    chain.image(fix_type="local", url=shot)
+                    chain.file_image(shot)
                     tail = f"，{passed_n} 个过线" if passed_n else f"，没到 {min_score:.0f} 分线"
                     chain.message(f"本轮主动刷 {len(round_entries)} 个视频，最高 {top:.0f} 分{tail}")
                     await self._share_to_master(chain, "score_summary")

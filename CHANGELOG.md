@@ -1,5 +1,8 @@
 # 更新日志
 
+## v1.3.1
+- 修复：新版 AstrBot 的 `MessageChain` 没有 `.image()` 方法导致 `dy主动` 等命令直接崩（`'MessageChain' object has no attribute 'image'`），7 处全部换成新 API：本地图 `file_image()`、网图 `url_image()`
+
 ## v1.3.0
 - 修复：推荐流/用户主页抓不到视频 ID 的问题——抖音首页卡片链接不挂在 `<a href>` 上，增加 HTML 正文正则兜底（`/video/(\d{15,21})`），登录态正常时稳定出候选
 
