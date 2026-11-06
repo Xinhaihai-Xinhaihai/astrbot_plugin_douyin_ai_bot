@@ -55,7 +55,11 @@ def parse_aweme_id(raw: str) -> str | None:
 
 
 async def fetch_video(aweme_id: str, frame_count: int = 6) -> DouyinVideoContent:
-    """打开视频页，抓元数据 + 抓 mp4 直链下载抽帧 + 抓热评."""
+    """打开视频页，抓元数据 + 抓 mp4 直链下载抽帧 + 抓热评.
+
+    元数据/热评优先从页面自身的 aweme/detail、comment/list 接口响应里取
+    （新版视频页 DOM 不再渲染 desc/作者），拿不到再退回 DOM 选择器。
+    """
     vc = DouyinVideoContent(aweme_id=aweme_id)
     page = None
     mp4_url = ""
@@ -66,12 +70,21 @@ async def fetch_video(aweme_id: str, frame_count: int = 6) -> DouyinVideoContent
             channel="msedge",
         )
         captured: list[str] = []
+        detail_json: dict = {}
+        comments_jsons: list[dict] = []
 
         async def _on_resp(resp):
             try:
                 u = resp.url
                 if _MP4_HINT.search(u):
                     captured.append(u)
+                ct = (resp.headers or {}).get("content-type", "")
+                if "json" not in ct or resp.status != 200:
+                    return
+                if "aweme/detail" in u and not detail_json:
+                    detail_json.update(await resp.json() or {})
+                elif "comment/list" in u:
+                    comments_jsons.append(await resp.json() or {})
             except Exception:
                 pass
 
@@ -84,7 +97,7 @@ async def fetch_video(aweme_id: str, frame_count: int = 6) -> DouyinVideoContent
             pass
         await page.wait_for_timeout(2500)
 
-        # ---- DOM 元数据 ----
+        # ---- DOM 元数据（兜底） ----
         info = await page.evaluate(
             r"""() => {
               const t = (el) => el ? (el.innerText||'').trim() : '';
@@ -108,13 +121,50 @@ async def fetch_video(aweme_id: str, frame_count: int = 6) -> DouyinVideoContent
               return {desc, nick, duration: v ? v.duration : 0, cover, stat, share_url: location.href};
             }"""
         )
-        vc.desc = (info.get("desc") or "")[:300]
-        vc.title = vc.desc.split("\n")[0][:120] if vc.desc else ""
-        vc.owner = (info.get("nick") or "").lstrip("@").strip()
         vc.duration = float(info.get("duration") or 0)
         vc.cover = info.get("cover") or ""
         vc.share_url = vc.page_url
-        vc.stat = _parse_stat(info.get("stat") or {})
+
+        # ---- 元数据：接口优先，DOM 兜底 ----
+        a = detail_json.get("aweme_detail") or {}
+        desc = (a.get("desc") or "").strip() or (info.get("desc") or "")
+        author = a.get("author") or {}
+        nick = (author.get("nickname") or "").strip() or (info.get("nick") or "")
+        if not vc.cover:
+            vid = a.get("video") or {}
+            addr = vid.get("cover") or vid.get("origin_cover") or {}
+            urls = addr.get("url_list") or []
+            if urls:
+                vc.cover = urls[0]
+        if a.get("statistics"):
+            st = a.get("statistics") or {}
+            vc.stat = {
+                "like": int(st.get("digg_count") or 0),
+                "reply": int(st.get("comment_count") or 0),
+                "favorite": int(st.get("collect_count") or 0),
+            }
+        else:
+            vc.stat = _parse_stat(info.get("stat") or {})
+
+        vc.desc = desc[:300]
+        vc.title = vc.desc.split("\n")[0][:120] if vc.desc else ""
+        vc.owner = nick.lstrip("@").strip()
+
+        # ---- 热评：接口优先，DOM 兜底 ----
+        for cj in comments_jsons:
+            for c in cj.get("comments") or []:
+                txt = (c.get("text") or "").strip()
+                if not txt:
+                    continue
+                user = ((c.get("user") or {}).get("nickname") or "").strip()
+                likes = int(c.get("digg_count") or 0)
+                item = (user, txt[:120], likes)
+                if item not in vc.top_comments:
+                    vc.top_comments.append(item)
+                if len(vc.top_comments) >= 6:
+                    break
+            if len(vc.top_comments) >= 6:
+                break
 
         # ---- mp4 直链 ----
         for u in dict.fromkeys(captured):
@@ -129,39 +179,40 @@ async def fetch_video(aweme_id: str, frame_count: int = 6) -> DouyinVideoContent
         if not vc.frames:
             logger.warning("[douyin_ai] 没拿到 mp4，只用标题/热评")
 
-        # ---- 热评（滚到评论区，抓 DOM） ----
-        try:
-            for _ in range(6):
-                await page.evaluate("window.scrollBy(0, 700)")
-                await page.wait_for_timeout(600)
-        except Exception:
-            pass
-        try:
-            cmts = await page.evaluate(
-                r"""() => {
-                  const out = [];
-                  const seen = new Set();
-                  // 通用：找含"回复"操作的评论卡
-                  const nodes = [...document.querySelectorAll('div, li')];
-                  for (const el of nodes) {
-                    const txt = (el.innerText||'').trim();
-                    if (txt.length < 6 || txt.length > 240) continue;
-                    if (!/回复/.test(txt)) continue;
-                    const key = txt.slice(0, 40);
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    out.push(txt);
-                    if (out.length >= 6) break;
-                  }
-                  return out;
-                }"""
-            )
-            for raw in cmts:
-                parsed = _parse_comment(raw)
-                if parsed:
-                    vc.top_comments.append(parsed)
-        except Exception as e:
-            logger.debug(f"[douyin_ai] 抓热评失败: {e}")
+        # ---- DOM 热评兜底（接口没给够时） ----
+        if len(vc.top_comments) < 3:
+            try:
+                for _ in range(6):
+                    await page.evaluate("window.scrollBy(0, 700)")
+                    await page.wait_for_timeout(600)
+            except Exception:
+                pass
+            try:
+                cmts = await page.evaluate(
+                    r"""() => {
+                      const out = [];
+                      const seen = new Set();
+                      // 通用：找含"回复"操作的评论卡
+                      const nodes = [...document.querySelectorAll('div, li')];
+                      for (const el of nodes) {
+                        const txt = (el.innerText||'').trim();
+                        if (txt.length < 6 || txt.length > 240) continue;
+                        if (!/回复/.test(txt)) continue;
+                        const key = txt.slice(0, 40);
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        out.push(txt);
+                        if (out.length >= 6) break;
+                      }
+                      return out;
+                    }"""
+                )
+                for raw in cmts:
+                    parsed = _parse_comment(raw)
+                    if parsed and parsed not in vc.top_comments:
+                        vc.top_comments.append(parsed)
+            except Exception as e:
+                logger.debug(f"[douyin_ai] 抓热评失败: {e}")
 
     except Exception as e:
         logger.warning(f"[douyin_ai] 拉取视频 {aweme_id} 失败: {e}")

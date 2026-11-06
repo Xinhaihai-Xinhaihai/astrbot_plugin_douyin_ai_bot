@@ -1,5 +1,8 @@
 # 更新日志
 
+## v1.3.3
+- 修复：打分汇总卡片里标题/作者/简介全空——抖音视频页改版后 DOM 不再渲染 `video-desc`/`account-name`，改为拦截页面自身的 `aweme/detail` 接口拿简介、作者、点赞/评论/收藏数，`comment/list` 接口拿热评，DOM 只作兜底（mp4 抽帧不受影响）
+
 ## v1.3.2
 - 修复：主动刷视频过线触发 `dy主动 刷` 崩（`unsupported operand type(s) for -: 'float' and 'dict'`）——`SeenStore._save` 裁剪时 `commented` 存的是 `{"ts","score","comment"}` dict，直接和 `time.time()` 相减炸了，现在按 `ts` 取时间戳裁剪，顺便兼容脏数据
 
