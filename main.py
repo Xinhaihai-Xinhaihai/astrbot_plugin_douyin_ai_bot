@@ -36,7 +36,7 @@ from .core.douyin import (
 from .core.interact import InteractState, get_bot_name, poll_comment_replies, poll_dm_new, send_dm
 from .core.live_checker import DouyinLiveChecker, LiveStatus
 from .core.proactive import SeenStore, fetch_feed_videos, fetch_user_videos
-from .core.screenshot import compose_screenshot
+from .core.screenshot import compose_screenshot, compose_score_card
 from .core.score import score_video
 from .core.store import SubscriptionStore
 
@@ -646,6 +646,7 @@ class DouyinAiBotPlugin(Star):
             logger.warning("[douyin_ai] 收集候选失败: %s", e)
 
         picked = 0
+        round_entries: list[dict] = []  # 本轮打分记录，用于汇总卡片
         for aweme_id, is_special in candidates:
             if picked >= n:
                 break
@@ -665,6 +666,11 @@ class DouyinAiBotPlugin(Star):
             except Exception as e:
                 logger.warning("[douyin_ai] 评分 %s 失败: %s", aweme_id, e)
             logger.info("[douyin_ai] %s 打分 %.0f（%s）", vc.title[:20], score, reason)
+            round_entries.append({
+                "aweme_id": aweme_id, "title": vc.title, "owner": vc.owner,
+                "special": is_special, "score": score, "reason": reason,
+                "liked": False, "link": vc.page_url,
+            })
 
             if score < min_score:
                 from .core.douyin import cleanup
@@ -710,6 +716,19 @@ class DouyinAiBotPlugin(Star):
             await self._share_to_master(chain, aweme_id)
             from .core.douyin import cleanup
             cleanup(vc)
+
+        # 本轮打分汇总：一个都没过线才推（有高分的各自单推过截图，不再汇总）
+        if round_entries and max(e.get("score", 0) for e in round_entries) < min_score:
+            try:
+                shot = await compose_score_card(round_entries)
+                if shot and Path(shot).exists():
+                    top = max(e.get("score", 0) for e in round_entries)
+                    chain = MessageChain()
+                    chain.image(fix_type="local", url=shot)
+                    chain.message(f"本轮主动刷 {len(round_entries)} 个视频，最高 {top:.0f} 分，没到 {min_score:.0f} 分线")
+                    await self._share_to_master(chain, "score_summary")
+            except Exception as e:
+                logger.warning("[douyin_ai] 本轮打分汇总推送失败: %s", e)
 
     async def _share_to_master(self, chain: MessageChain, aweme_id: str):
         """推直播转发群（forward_groups）；没配再退回 notify_groups。"""
