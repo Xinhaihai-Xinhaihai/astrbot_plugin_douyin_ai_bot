@@ -7,15 +7,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path
 
 from astrbot.api import logger
 
 from .browser import DouyinBrowser
-
-logger = logging.getLogger(__name__)
-
 
 async def wait_for_login(profile_dir: Path, channel: str = "msedge", timeout: int = 180) -> bool:
     """打开非无头浏览器等扫码，返回是否拿到登录态（sessionid cookie）."""

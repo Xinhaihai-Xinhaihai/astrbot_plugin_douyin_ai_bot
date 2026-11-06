@@ -15,15 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
-
-logger = logging.getLogger(__name__)
-
+from astrbot.api import logger
 
 class SubscriptionStore:
     """异步订阅存储，写入用临时文件+原子替换，避免卡死事件循环。"""

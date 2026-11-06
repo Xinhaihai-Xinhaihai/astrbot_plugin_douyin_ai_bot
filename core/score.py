@@ -10,13 +10,9 @@
 from __future__ import annotations
 
 import json
-import logging
-
 from astrbot.api import logger
 
 from .douyin import DouyinVideoContent
-
-logger = logging.getLogger(__name__)
 
 _SCORE_SYSTEM = (
     "你是视频评分助手。根据视频截图、标题、描述、热门评论，给这个视频打分。\n"

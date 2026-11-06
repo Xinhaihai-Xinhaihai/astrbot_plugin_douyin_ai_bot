@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -69,10 +68,17 @@ class DouyinBrowser:
                 kwargs["channel"] = self.channel
             try:
                 self._ctx = await self._pw.chromium.launch_persistent_context(**kwargs)
-            except Exception:
-                # 没有 msedge 就裸 chromium
+            except Exception as e:
+                # 首选 channel 起不来就裸 chromium；还起不来就把真实原因抛出去
+                logger.warning(f"[douyin_ai] 浏览器 channel={self.channel!r} 启动失败，降级裸 chromium: {e}")
                 kwargs.pop("channel", None)
-                self._ctx = await self._pw.chromium.launch_persistent_context(**kwargs)
+                try:
+                    self._ctx = await self._pw.chromium.launch_persistent_context(**kwargs)
+                except Exception as e2:
+                    raise RuntimeError(
+                        f"浏览器启动失败：channel={self.channel!r} 不可用且本机没有 playwright chromium。"
+                        f"请装 Edge/Chrome 或运行 playwright install。原始错误: {e2}"
+                    ) from e2
             self._ctx.set_default_timeout(30000)
 
     async def new_page(self, home: bool = True):

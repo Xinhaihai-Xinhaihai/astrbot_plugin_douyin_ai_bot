@@ -610,7 +610,7 @@ class DouyinAiBotPlugin(Star):
         min_score = float(self._c("score_threshold", 7) or 7)
         logger.info("[douyin_ai] 主动刷开始：取 %s 个，过线 %.0f 分才评", n, min_score)
 
-        # 收集候选：特别关心 up 优先，其次订阅的 up，最后推荐流
+        # 收集候选：特别关心 up 优先，其次订阅的 up
         candidates: list[tuple[str, bool]] = []  # (aweme_id, is_special)
         seen_ids: set[str] = set()
         specials = self._store.all_special()
@@ -628,13 +628,28 @@ class DouyinAiBotPlugin(Star):
                     if aid not in seen_ids and len(candidates) < n * 3:
                         seen_ids.add(aid)
                         candidates.append((aid, False))
-            if len(candidates) < n:
+        except Exception as e:
+            logger.warning("[douyin_ai] 收集订阅候选失败: %s", e)
+
+        # 订阅候选不够 → 推荐流兜底（独立 try，失败不影响已收集的）
+        if len(candidates) < n:
+            try:
                 for aid in await fetch_feed_videos(n * 2, browser):
                     if aid not in seen_ids and len(candidates) < n * 3:
                         seen_ids.add(aid)
                         candidates.append((aid, False))
-        except Exception as e:
-            logger.warning("[douyin_ai] 收集候选失败: %s", e)
+            except Exception as e:
+                logger.warning("[douyin_ai] 推荐流兜底失败: %s", e)
+
+        if not candidates:
+            logger.warning("[douyin_ai] 本轮没刷到任何候选视频（订阅没抓到 + 推荐流失败）")
+            try:
+                await self._share_to_master(MessageChain().message(
+                    "⚠ 主动刷本轮没刷到任何视频：订阅的号抓不到作品，推荐流也失败（可能登录态掉了，试试 dy_qr 重新登录）"
+                ), "no_candidates")
+            except Exception:
+                pass
+            return
 
         picked = 0
         round_entries: list[dict] = []  # 本轮打分记录，用于汇总卡片

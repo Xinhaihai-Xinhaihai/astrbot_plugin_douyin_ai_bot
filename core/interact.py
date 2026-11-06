@@ -7,16 +7,12 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import time
 from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
-
-logger = logging.getLogger(__name__)
-
 
 class InteractState:
     def __init__(self, path: Path):

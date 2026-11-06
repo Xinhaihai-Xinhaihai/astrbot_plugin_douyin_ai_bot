@@ -11,12 +11,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
-
-logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
