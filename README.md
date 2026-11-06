@@ -2,6 +2,8 @@
 
 抖音 AI 陪看插件（AstrBot v4）
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 - **直播订阅检测**：订阅主播直播间，定时轮询开播状态，开播自动推「封面图 + 直播间链接 + 配文」到指定群，群里说触发词即时查
 - **陪看评论**：发个抖音视频链接 → 下载抽帧喂多模态视觉模型「看懂」→ 用登录身份发一条像真人的短评 → 截图推转发群（私聊只回一行文字确认，不再刷屏）
 - **主动刷视频**：定时刷一批视频（特别关心 up 优先）→ 逐个打分 → 过线才评论 → 截图推直播转发群
@@ -157,3 +159,7 @@
 ## 交流群
 
 QQ 群：`1108937527`（有问题/建议群里说，代码 issue 走 GitHub）
+
+## License
+
+MIT，见 [LICENSE](LICENSE)。
