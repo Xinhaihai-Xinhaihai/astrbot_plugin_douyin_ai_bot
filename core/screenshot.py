@@ -193,11 +193,11 @@ async def compose_screenshot(
     # ---------- 热门评论 ----------
     top_comments = (top_comments or [])[:3]
     if top_comments:
-        draw.text((X0, y), "♡ 热门评论", font=f_sec, fill=(214, 128, 152))
+        draw.text((X0, y), "◆ 热门评论", font=f_sec, fill=(214, 128, 152))
         y += int(f_sec.size * 1.7)
         for name, text, like in top_comments:
             lines = _wrap(draw, text, f_body, tw - 46)
-            draw.text((X0 + 2, y + 2), f"♥ {like:,}" if like else "♥", font=f_name, fill=C_LIKE)
+            draw.text((X0 + 2, y + 2), f"★ {like:,}" if like else "★", font=f_name, fill=C_LIKE)
             draw.text((X0 + 46, y + 2), name[:8] or "匿名", font=f_name, fill=C_NAME)
             for i, line in enumerate(lines[:3]):
                 draw.text((X0 + 46, y + int(f_name.size * 1.5) + i * int(f_body.size * 1.3)), line, font=f_body, fill=C_TEXT)
@@ -207,7 +207,7 @@ async def compose_screenshot(
         y += 16
 
     # ---------- 我的评论 ----------
-    draw.text((X0, y), "✿ 我发的评论", font=f_sec, fill=C_MY)
+    draw.text((X0, y), "★ 我发的评论", font=f_sec, fill=C_MY)
     y += int(f_sec.size * 1.7)
     for line in _wrap(draw, comment or "(未生成)", f_body, tw - 20)[:4]:
         draw.text((X0 + 8, y), line, font=f_body, fill=C_MY_TXT)
@@ -217,7 +217,7 @@ async def compose_screenshot(
     # ---------- 链接 ----------
     if y < Y1:
         link = link or f"https://www.bilibili.com/video/{bvid}"
-        draw.text((X0, y), f"▸ {link[:38]}", font=f_link, fill=C_LINK)
+        draw.text((X0, y), f"→ {link[:38]}", font=f_link, fill=C_LINK)
 
     out = Path(tempfile.mktemp(prefix="bili_shot_", suffix=".jpg"))
     canvas.save(out, quality=90)
@@ -303,7 +303,7 @@ async def compose_score_card(round_entries: list[dict]) -> str:
     top_score = max((e.get("score", 0) for e in round_entries), default=0)
 
     # ---------- 标题 ----------
-    draw.text((X0, y), "🎬 主动刷·本轮打分", font=f_title, fill=C_TITLE)
+    draw.text((X0, y), "★ 主动刷·本轮打分", font=f_title, fill=C_TITLE)
     y += int(f_title.size * 1.35) + 4
     meta = f"共 {n} 个视频 · 最高 {top_score:.0f} 分"
     if passed:
@@ -329,10 +329,11 @@ async def compose_score_card(round_entries: list[dict]) -> str:
         # 行首：分数（大号，过线粉红 / 普通蓝灰）
         score_color = (226, 116, 142) if liked else ((124, 158, 198) if score >= 5 else (150, 158, 180))
         draw.text((X0, y), f"{score:.0f}", font=f_score, fill=score_color)
+        sx = X0 + draw.textlength(f"{score:.0f}", font=f_score) + 6
         if liked:
-            draw.text((X0 + 44, y + 4), "♥ 过线已评", font=f_meta, fill=(226, 116, 142))
+            draw.text((sx, y + 4), "★ 过线已评", font=f_meta, fill=(226, 116, 142))
         else:
-            draw.text((X0 + 44, y + 5), "分", font=f_meta, fill=C_META)
+            draw.text((sx, y + 5), "分", font=f_meta, fill=C_META)
 
         # 标题（缩进到分数右边）
         x_text = X0 + 66
@@ -346,7 +347,7 @@ async def compose_score_card(round_entries: list[dict]) -> str:
         # 作者 + 特别关心
         meta_line = owner[:20]
         if special:
-            meta_line = "⭐ " + meta_line
+            meta_line = "★ " + meta_line
         draw.text((x_text, ty), meta_line, font=f_meta, fill=C_NAME)
         ty += int(f_meta.size * 1.5)
 
@@ -359,19 +360,21 @@ async def compose_score_card(round_entries: list[dict]) -> str:
 
         # 链接
         link = e.get("link") or f"https://www.douyin.com/video/{e.get('aweme_id', '')}"
-        draw.text((x_text, ty), f"▸ {link[:34]}", font=f_link, fill=C_LINK)
-        ty += int(f_link.size * 1.5) + 12
+        draw.text((x_text, ty), f"→ {link[:34]}", font=f_link, fill=C_LINK)
+        ty += int(f_link.size * 1.5) + 10
 
-        if ty > Y1 - 90:
-            break  # 空间不够就不画了
-
+        # 推进 y 到本条底部 + 间距
+        if ty + 14 > Y1:
+            # 空间不够：最多再画一条就停
+            y = ty + 14
+            if i < len(round_entries) - 1 and y < Y1:
+                _dash(draw, X0, Y1 - 8, X1, Y1 - 8, (222, 230, 244))
+            break
         if i < len(round_entries) - 1:
-            _dash(draw, X0, min(ty - 4, Y1 - 30), X1, min(ty - 4, Y1 - 30), (222, 230, 244))
-            ty += 6
-
-    # 底部提示
-    if y < Y1 and ty > Y1:
-        draw.text((X0, Y1 - 24), "（剩余条目略）", font=f_link, fill=C_LINK)
+            _dash(draw, X0, ty + 4, X1, ty + 4, (222, 230, 244))
+            y = ty + 16
+        else:
+            y = ty + 10
 
     out = Path(tempfile.mktemp(prefix="dy_score_", suffix=".jpg"))
     canvas.save(out, quality=90)
