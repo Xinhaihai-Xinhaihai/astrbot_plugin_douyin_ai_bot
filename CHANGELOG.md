@@ -1,5 +1,8 @@
 # 更新日志
 
+## v1.3.6
+- 调整：过线视频截图不再渲染封面图（接口 cover 是占位图 + 占版面），直接从标题开始排版
+
 ## v1.3.5
 - 开源：加 MIT LICENSE；README 加 license 徽章和 License 章节
 

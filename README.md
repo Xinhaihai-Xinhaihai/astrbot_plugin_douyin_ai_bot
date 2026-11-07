@@ -34,7 +34,7 @@
 2. HTTP 拿视频信息 + 下载地址，ffmpeg 按 `frame_count` 均匀抽帧
 3. 截图 + 标题 + 热评喂视觉模型（配 `comment_style` 提示词）生成 1-2 句口语短评
 4. 带登录 cookie 用 UI 自动化发出评论（需要 a_bogus 签名，所以走页面而不是自己造接口）
-5. 把「视频首图 + 评论 + Cinnamoroll 相框」渲染成截图，推给触发者 / 截图推送群
+5. 把「标题 + 作者 + 评论 + Cinnamoroll 相框」渲染成截图，推给触发者 / 截图推送群（1.3.6 起不渲染封面图）
 
 限制：同一视频 `cooldown_hours` 内只评一次；任意两次评论间隔 ≥ `global_cooldown_minutes`。
 

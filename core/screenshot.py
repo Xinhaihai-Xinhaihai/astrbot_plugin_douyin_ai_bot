@@ -140,39 +140,7 @@ async def compose_screenshot(
     f_sec = _load_font(19, bold=True)
     f_link = _load_font(17)
 
-    # ---------- 封面（居中圆角，新版相框白区矮，封面压小一点） ----------
-    cover_h = int(tw * 9 / 16 * 0.62)
-    cover_img = None
-    # 抽帧优先：接口拿到的 cover 可能是抖音占位图（三条视频同一张），首帧才是该视频的
-    for f in frames or []:
-        try:
-            cover_img = Image.open(f).convert("RGB")
-            break
-        except Exception:
-            continue
-    if cover_img is None and cover_url:
-        tmp = Path(tempfile.mktemp(suffix=".jpg"))
-        if await _download_image(cover_url, tmp):
-            try:
-                cover_img = Image.open(tmp).convert("RGB")
-            except Exception:
-                cover_img = None
-            finally:
-                tmp.unlink(missing_ok=True)
-    if cover_img is None:
-        cover_img = Image.new("RGB", (tw, cover_h), (216, 228, 244))
-
-    cw, ch = cover_img.size
-    scale = max(tw / cw, cover_h / ch)
-    cover_img = cover_img.resize((int(cw * scale) + 1, int(ch * scale) + 1))
-    left = (cover_img.width - tw) // 2
-    top = (cover_img.height - cover_h) // 2
-    cover_img = cover_img.crop((left, top, left + tw, top + cover_h))
-    cover_img = _rounded(cover_img, 14)
-    canvas.paste(cover_img, (X0 - 4, y), cover_img)
-    y += cover_h + 18
-
-    # ---------- 标题 ----------
+    # ---------- 标题（1.3.6 起不渲染封面图，直接从标题开始排） ----------
     for line in _wrap(draw, title or "(无标题)", f_title, tw)[:3]:
         draw.text((X0, y), line, font=f_title, fill=C_TITLE)
         y += int(f_title.size * 1.32)
