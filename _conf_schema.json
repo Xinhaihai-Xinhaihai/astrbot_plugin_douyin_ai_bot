@@ -147,6 +147,13 @@
     "default": "msedge",
     "hint": "msedge=系统 Edge；留空=Playwright Chromium（需先 playwright install chromium）。"
   },
+  "qr_cdp_port": {
+    "description": "浏览器扫码端口",
+    "type": "int",
+    "default": 0,
+    "slider": {"min": 0, "max": 65535, "step": 1},
+    "hint": "dy_qr 扫码登录时，起一个带远程调试端口的无头浏览器并放行此端口，用户浏览器输 服务器IP:端口 连进去扫码。0=关闭，走默认二维码截图方式。建议 6199。"
+  },
 
   "_proactive_section": {
     "description": "=== 主动刷视频 ===",

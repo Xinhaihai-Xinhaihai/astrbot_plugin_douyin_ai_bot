@@ -127,6 +127,73 @@ async def _grab_qr(page) -> bytes:
     return b""
 
 
+async def cdp_login(profile_dir: Path, port: int, channel: str = "msedge", timeout: int = 600) -> bool:
+    """方式三：起一个带 CDP 远程调试端口(0.0.0.0:port)的无头浏览器，用户浏览器输 `IP:port` 连进去扫码。
+
+    适合服务器部署：服务器上没有显示器，把 6199 这类端口放行到公网，
+    用户自己浏览器输 `服务器IP:端口`（devtools 页面）打开抖音扫码，扫码态落盘后返回。
+    """
+    from playwright.async_api import async_playwright
+
+    pw = None
+    ctx = None
+    try:
+        pw = await async_playwright().start()
+        kwargs = {
+            "user_data_dir": str(profile_dir),
+            "headless": True,
+            "viewport": {"width": 1280, "height": 900},
+            "locale": "zh-CN",
+            "args": [
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--remote-debugging-address=0.0.0.0",
+                f"--remote-debugging-port={port}",
+                "--remote-allow-origins=*",
+            ],
+        }
+        if channel:
+            kwargs["channel"] = channel
+        try:
+            ctx = await pw.chromium.launch_persistent_context(**kwargs)
+        except Exception:
+            kwargs.pop("channel", None)
+            ctx = await pw.chromium.launch_persistent_context(**kwargs)
+
+        page = await ctx.new_page()
+        try:
+            await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30000)
+        except Exception:
+            pass
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(3)
+            try:
+                cookies = await ctx.cookies()
+                if any(c.get("name") == "sessionid" and c.get("value") for c in cookies):
+                    logger.info("[douyin_ai] CDP 扫码登录成功，sessionid 已落盘")
+                    return True
+            except Exception:
+                continue
+        logger.warning("[douyin_ai] CDP 扫码登录超时")
+        return False
+    except Exception as e:
+        logger.warning(f"[douyin_ai] CDP 扫码登录异常: {e}")
+        return False
+    finally:
+        try:
+            if ctx:
+                await ctx.close()
+        except Exception:
+            pass
+        try:
+            if pw:
+                await pw.stop()
+        except Exception:
+            pass
+
+
 async def qr_login_bytes(profile_dir: Path, channel: str = "msedge", timeout: int = 150) -> tuple[bytes, bool]:
     """方式二：无头浏览器抓登录二维码。返回 (二维码PNG字节, 是否扫成)。
 

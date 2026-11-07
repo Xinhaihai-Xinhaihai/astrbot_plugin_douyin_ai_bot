@@ -22,7 +22,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
-from .core.auth import is_logged_in, login_from_cookies, qr_login_bytes, wait_for_login
+from .core.auth import cdp_login, is_logged_in, login_from_cookies, qr_login_bytes, wait_for_login
 from .core.browser import DouyinBrowser
 from .core.commenter import generate_comment
 from .core.cooldown import CooldownStore
@@ -541,8 +541,23 @@ class DouyinAiBotPlugin(Star):
 
     @filter.command("dy_qr", alias={"抖音二维码", "dy二维码"})
     async def cmd_dy_qr(self, event: AstrMessageEvent):
-        """方式二：无头浏览器抓登录二维码推过来，手机抖音扫（服务器不用开浏览器窗口）。"""
+        """方式二：无头浏览器抓登录二维码推过来，手机抖音扫（服务器不用开浏览器窗口）。
+
+        配了「扫码端口」(qr_cdp_port) 时改走 CDP 模式：起一个带远程调试端口的无头浏览器，
+        用户自己浏览器输 `服务器IP:端口` 连进去扫码，扫完自动落盘。
+        """
         self._remember_platform(event)
+        port = int(self._c("qr_cdp_port", 0) or 0)
+        if port > 0:
+            yield event.plain_result("正在进入浏览器扫码…")
+            yield event.plain_result(
+                f"请在浏览器打开：服务器IP:{port}\n"
+                f"（把「服务器IP」换成你服务器公网/内网地址，例如 1.2.3.4:{port}，"
+                f"进去是 Chrome 调试页，点抖音标签页扫码登录即可，扫完自动落盘）"
+            )
+            ok = await cdp_login(self._profile_dir(), port, channel=str(self._c("browser_channel", "msedge") or ""), timeout=600)
+            yield event.plain_result("扫码成功，登录态已落盘" if ok else "扫码超时或未完成，再发一次 dy_qr 重试")
+            return
         yield event.plain_result("正在生成登录二维码，稍等…")
         qr, ok = await qr_login_bytes(self._profile_dir(), channel=str(self._c("browser_channel", "msedge") or ""), timeout=150)
         if ok:
