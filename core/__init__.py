@@ -1,4 +1,4 @@
-from .auth import is_logged_in, login_from_cookies, qr_login_bytes, wait_for_login
+from .auth import is_logged_in, login_from_cookies, run_qr_login
 from .browser import DouyinBrowser
 from .commenter import generate_comment
 from .cooldown import CooldownStore
@@ -31,8 +31,7 @@ __all__ = [
     "poll_comment_replies",
     "send_dm",
     "get_bot_name",
-    "wait_for_login",
     "login_from_cookies",
-    "qr_login_bytes",
+    "run_qr_login",
     "is_logged_in",
 ]

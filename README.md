@@ -8,7 +8,7 @@
 - **陪看评论**：发个抖音视频链接 → 下载抽帧喂多模态视觉模型「看懂」→ 用登录身份发一条像真人的短评 → 截图推转发群（私聊只回一行文字确认，不再刷屏）
 - **主动刷视频**：定时刷一批视频（特别关心 up 优先）→ 逐个打分 → 过线才评论 → 截图推直播转发群
 - **互动提醒**：轮询私信新消息、我发的评论被谁回复了，推直播转发群；支持一键回私信
-- **三种登录方式**：本机浏览器扫码 / 推二维码图手机扫 / 贴浏览器 Cookie 导入（服务器无桌面时 `dy登录` 自动转推二维码；无头服务器推荐后两种）
+- **服务器扫码登录**：持续截图等待二维码 / 自动尝试拼图滑块 / 验证通过后等 5 秒截码推送；也可导入浏览器 Cookie
 
 不点赞、不收藏、不刷量。评论频率受「同视频冷却 + 全局间隔」双重限制。
 
@@ -71,32 +71,51 @@
 | `dy互动 开/关` | 开/关私信+评论回复轮询 |
 | `dy互动 私信回复 <内容>` | 用抖音身份回最近私信会话 |
 | `dy刷状态` | 主动刷/互动/口味/特别关心/主人 一览 |
-| `dy登录` | 本机有桌面就拉浏览器扫码（180s）；服务器/无界面环境自动改推二维码图手机扫 |
-| `dy_qr` | 生成登录二维码推给你，手机扫（150s），服务器不用开浏览器窗口 |
+| `dy登录` | 管理员获取登录二维码，与 `dy_qr` 相同，支持无桌面服务器 |
+| `dy_qr` | 管理员扫码登录：自动尝试拼图滑块，通过后等 5 秒截码并发回当前会话 |
 | `dy_cookie <整段Cookie 或发txt文件>` | 浏览器登录抖音后 F12-Cookie 全选复制，贴过来导入 |
 | `dy状态` | 登录态 / 订阅 / 转发群 |
 | `添加触发词 <词>` / `删除触发词 <词>` / `触发词列表` | 触发词管理 |
 | 触发词（默认：看看腿） | 即时检查直播，有在播的发封面+链接+配文 |
 
-## 登录方式（重点：无头服务器怎么登录）
+## 服务器登录
 
-抖音 web 扫码登录没有公开 API（需要 a_bogus 签名），所以登录都走浏览器。三种方式：
+`dy登录` 和 `dy_qr` 使用同一条截图登录流程，不需要远程桌面或开放调试端口。登录、二维码及 Cookie 导入命令仅限 AstrBot 管理员。
 
-| 方式 | 命令 | 适用场景 |
-| --- | --- | --- |
-| 本机浏览器扫码 | `dy登录` | bot 跑在带桌面的电脑上，直接弹窗口扫 |
-| **无头二维码** | `dy_qr` | **无头服务器推荐**：bot 开无头浏览器抓登录二维码截图推给你，手机抖音扫，cookie 自动落盘 |
-| **CDP 远程浏览器** | `dy_qr`（配`扫码端口`） | 配了 `qr_cdp_port` 时改走这条：`dy_qr` 直接起带调试端口的无头浏览器，你浏览器输 `服务器IP:端口` 进去扫码，扫完自动落盘。适合抖音把无头二维码拦成验证码页的情况 |
-| **贴 Cookie** | `dy_cookie` | **最稳**：你在自己电脑浏览器登录抖音 → F12 → 应用程序 → Cookie → 全选复制 → 发给 bot。不用装浏览器也能跑（只用来存 cookie） |
+默认 `browser_mode=auto` 使用普通浏览器。Linux 无显示环境时，插件自动启动独立 Xvfb 虚拟显示，浏览器仍在服务器上运行，二维码自动截图发到聊天中。已有 `DISPLAY` 时复用现有显示；Windows/macOS 使用本机浏览器窗口。
 
-登录态存在 `browser_profile/`（持久化 profile），一次登录长期复用，cookie 过期重新走一遍即可。
-`dy_cookie` 导入的 cookie 只要包含 `sessionid` 就能发评论；只导 `ttwid` 也能降低风控但发不了评论。
+无头浏览器中的“操作过快 [5014][502]”不一定由拖动速度引起：分段等待后仍可能被服务端拒绝。普通浏览器模式是本次增加的可选运行路径，不能保证所有服务器网络环境都通过验证。
 
-> 安全提示：Cookie 含登录凭证，只发给自己管理的 bot 私聊，别发群里。
+1. 在 **AstrBot 运行环境内**安装依赖与浏览器；Docker 部署需在容器内执行，并持久化 AstrBot 的 `data` 目录：
+
+   ```bash
+   # Debian/Ubuntu；系统依赖安装需使用有权限的账户。
+   apt-get update
+   apt-get install -y xvfb
+   python -m pip install -r requirements.txt
+   python -m playwright install --with-deps chromium
+   ```
+
+2. 在插件配置中将 `browser_channel` 留空、`browser_mode` 设为 `auto`，使用 Playwright Chromium；已有 Edge 可保留 `msedge`。修改模式后重载插件。Linux 缺少 Xvfb 会收到安装提示；确实需要无头模式时可显式设置 `headless`，此时不需要 Xvfb。
+3. 给机器人发送 `dy_qr`。插件在后台打开抖音并持续检查截图；遇到拼图滑块会识别缺口、换算显示尺寸并分四段拖动。每段滑动后保持按住，停顿 **1.5 秒**，到达终点并停顿后再松开提交，兼容 iframe 内的验证页。
+4. 页面确认验证框消失后，**固定等待 5 秒**，然后重新截图。只有二维码能实际解码，才将二维码裁剪图发回发起命令的会话；尚未出现则继续等待。无滑块时，二维码就绪即可发送。
+5. 用手机抖音扫码并确认。浏览器在发图后保持打开，默认再等 150 秒；二维码过期后自动刷新并推送新图。登录成功会通知并保存登录态。
+
+准备二维码和等待扫码分别计时，配置为 `qr_prepare_timeout`（默认 180 秒）和 `qr_scan_timeout`（默认 150 秒）。一次只允许一个扫码任务，重复命令会提示当前仍在登录。插件卸载会取消登录任务并清理浏览器。
+
+拼图滑块默认最多尝试 3 次（`qr_slider_attempts`）。普通识别或拖动失败可重试；如果页面明确返回“操作过快 [5014][502]”，本轮立即停止提交，避免对已拒绝的会话反复刷新。自动处理需要拼图结构可识别；旋转、点选等类型不保证支持。失败会明确提示，不会把验证页或占位图当成二维码发送。可调整运行模式后重试，或使用 `dy_cookie` 导入自己浏览器的 Cookie。
+
+Docker 部署须在 **AstrBot 所在容器内**安装 `xvfb` 和 Chromium 的系统依赖，在镜像构建中保留这些安装步骤；只在宿主机安装不会生效。插件管理自己的 Xvfb 进程，无需另开 VNC、无需 `xvfb-run` 包裹整个 AstrBot，也不会修改其他插件的 `DISPLAY`。卸载时会关闭其创建的显示进程。
+
+`dy_cookie <整段 Cookie>` 支持 `a=1; b=2` 格式。Cookie、二维码只应发送到自己管理的会话。导入 Cookie 同样需要服务器浏览器，因为后续功能使用浏览器上下文。
+
+登录态保存在插件数据目录中的 `browser_profile/` 及 `login_cookies.json`。后者补充保存会话 Cookie，以便重启恢复；这些文件包含登录凭证，不应分享。是否登录按抖音域名下未过期的 `sessionid` / `sessionid_ss` 判断，服务端撤销的会话仍需重新登录。
+
+从 1.3.7 升级时，旧 `qr_cdp_port` 配置会被保留但不再启用，`dy_qr` 始终走自动截图流程。
 
 ## 依赖
 
-- Python 依赖见 `requirements.txt`（playwright、aiohttp、imageio-ffmpeg、pillow）
+- Python 依赖见 `requirements.txt`（Playwright、aiohttp、OpenCV headless、NumPy、Pillow、imageio-ffmpeg）
 - 系统浏览器：Edge（默认）或 Playwright Chromium（`playwright install chromium`）
 - 视觉模型：AstrBot 服务商里任一支持图片输入的模型（Gemini / Doubao / GPT-4o 等）
 
@@ -131,7 +150,11 @@
 
 - `ttwid`：可选，降低风控
 - `browser_channel`：`msedge`（默认）或留空用 Chromium
-- `qr_cdp_port`：`dy_qr` 扫码登录的浏览器远程调试端口（默认 0=关闭）。填了如 `6199`，`dy_qr` 会起带调试端口的无头浏览器并提示你打开 `服务器IP:6199` 扫码，`服务器IP` 自己替换成实际地址，注意在安全组/防火墙放行该端口
+- `browser_mode`：`auto`（默认，普通浏览器 + 按需 Xvfb）、`headed`（同样按需提供显示）、`headless`（无头）；修改后重载插件
+- `qr_prepare_timeout`：等待二维码和验证的超时秒数，默认 180
+- `qr_scan_timeout`：首张二维码发送后等待扫码的秒数，默认 150
+- `qr_slider_attempts`：自动处理拼图滑块的最大次数，默认 3
+- `qr_cdp_port`：旧配置兼容字段，已停用
 
 **主动刷视频**
 
@@ -157,6 +180,18 @@
 - `seen_videos.json`：主动刷看过/评过的视频（30 天）
 - `interact_state.json`：互动已处理记录（30 天）
 - `browser_profile/`：浏览器持久化 profile（登录态）
+- `login_cookies.json`：登录成功时保存的会话 Cookie，供重启恢复
+
+## 开发验证
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m playwright install chromium
+python -m pytest -q
+ruff check main.py core/auth.py core/browser.py core/captcha.py core/display.py core/login_capture.py tests
+```
+
+浏览器测试默认使用 Chromium；测试机使用 Edge 时，设置环境变量 `PLAYWRIGHT_TEST_CHANNEL=msedge`。测试页及 Cookie 都是本地构造的数据，覆盖 iframe 分段拼图拖动、5 秒延时、二维码占位、发图时序、超时/取消、虚拟显示生命周期和重启恢复，不会登录真实账号。线上检查与尚未验证的环境见 [VALIDATION.md](VALIDATION.md)。
 
 ## 交流群
 

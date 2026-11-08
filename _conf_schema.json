@@ -147,12 +147,40 @@
     "default": "msedge",
     "hint": "msedge=系统 Edge；留空=Playwright Chromium（需先 playwright install chromium）。"
   },
+  "browser_mode": {
+    "description": "浏览器运行模式",
+    "type": "string",
+    "default": "auto",
+    "options": ["auto", "headed", "headless"],
+    "hint": "推荐 auto：使用普通浏览器，Linux 无显示环境时自动启动 Xvfb（需安装 xvfb）。headless 无需显示依赖，但可能被抖音拒绝验证。修改后重载插件生效。"
+  },
   "qr_cdp_port": {
-    "description": "浏览器扫码端口",
+    "description": "旧版浏览器扫码端口（已停用）",
     "type": "int",
     "default": 0,
-    "slider": {"min": 0, "max": 65535, "step": 1},
-    "hint": "dy_qr 扫码登录时，起一个带远程调试端口的无头浏览器并放行此端口，用户浏览器输 服务器IP:端口 连进去扫码。0=关闭，走默认二维码截图方式。建议 6199。"
+    "invisible": true,
+    "hint": "兼容旧配置保留。登录统一自动截图推送，不再启动远程调试端口。"
+  },
+  "qr_prepare_timeout": {
+    "description": "等待登录二维码超时（秒）",
+    "type": "int",
+    "default": 180,
+    "slider": {"min": 30, "max": 600, "step": 10},
+    "hint": "等待页面和二维码加载、处理拼图滑块。验证通过后固定等待 5 秒再截图。"
+  },
+  "qr_scan_timeout": {
+    "description": "发送二维码后等待扫码（秒）",
+    "type": "int",
+    "default": 150,
+    "slider": {"min": 30, "max": 600, "step": 10},
+    "hint": "从第一张二维码发送成功后计时。手机扫码后需确认登录；二维码刷新不会延长总等待时间。"
+  },
+  "qr_slider_attempts": {
+    "description": "拼图滑块最大尝试次数",
+    "type": "int",
+    "default": 3,
+    "slider": {"min": 1, "max": 5, "step": 1},
+    "hint": "自动识别缺口并拖动，只有验证框消失才继续。失败到达上限后结束本次登录并提示。"
   },
 
   "_proactive_section": {

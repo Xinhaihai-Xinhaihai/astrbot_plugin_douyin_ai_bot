@@ -1,2 +1,6 @@
 playwright
 aiohttp
+opencv-python-headless>=4.10,<5
+numpy>=1.26,<3
+Pillow>=10
+imageio-ffmpeg>=0.5

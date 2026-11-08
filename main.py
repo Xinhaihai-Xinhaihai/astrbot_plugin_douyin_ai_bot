@@ -1,4 +1,4 @@
-﻿"""抖音 AI 插件：直播开播订阅检测 + 陪看评论 + 主动刷视频 + 互动（私信/评论回复）.
+"""抖音 AI 插件：直播开播订阅检测 + 陪看评论 + 主动刷视频 + 互动（私信/评论回复）.
 
 - 直播订阅：`订阅 <抖音号/链接>` / `取消订阅 <key>` / `订阅列表`
 - 转发群：`直播转发 群号` / `取消转发 群号`
@@ -17,27 +17,33 @@ import time
 from pathlib import Path
 from typing import Any
 
-from astrbot.api import logger
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Image, Plain
 from astrbot.api.star import Context, Star, StarTools
-from astrbot.core.config.astrbot_config import AstrBotConfig
 
-from .core.auth import cdp_login, is_logged_in, login_from_cookies, qr_login_bytes, wait_for_login
+from .core.auth import LoginError, is_logged_in, login_from_cookies, run_qr_login
 from .core.browser import DouyinBrowser
 from .core.commenter import generate_comment
 from .core.cooldown import CooldownStore
+from .core.display import BrowserEnvironmentError
 from .core.douyin import (
-    DouyinVideoContent,
     cleanup,
     fetch_video,
     parse_aweme_id,
     send_comment,
 )
-from .core.interact import InteractState, get_bot_name, poll_comment_replies, poll_dm_new, send_dm
+from .core.interact import (
+    InteractState,
+    get_bot_name,
+    poll_comment_replies,
+    poll_dm_new,
+    send_dm,
+)
 from .core.live_checker import DouyinLiveChecker, LiveStatus
 from .core.proactive import SeenStore, fetch_feed_videos, fetch_user_videos
-from .core.screenshot import compose_screenshot, compose_score_card
 from .core.score import score_video
+from .core.screenshot import compose_score_card, compose_screenshot
 from .core.store import SubscriptionStore
 
 PLUGIN_DIR_NAME = "astrbot_plugin_douyin_ai_bot"
@@ -82,6 +88,7 @@ class DouyinAiBotPlugin(Star):
         self._platform_id: str = ""
         self._data_dir: Path | None = None
         self._comment_lock = asyncio.Lock()
+        self._login_task: asyncio.Task | None = None
         self._reload_runtime()
 
     # ================= 配置 =================
@@ -90,6 +97,7 @@ class DouyinAiBotPlugin(Star):
         return _cfg_get(self.cfg, key, default)
 
     def _reload_runtime(self) -> None:
+        DouyinBrowser.default_mode = str(self._c("browser_mode", "auto") or "auto")
         try:
             self._data_dir = Path(StarTools.get_data_dir(PLUGIN_DIR_NAME))
             self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -139,6 +147,13 @@ class DouyinAiBotPlugin(Star):
             self._start_interact()
 
     async def terminate(self):
+        if self._login_task and not self._login_task.done():
+            self._login_task.cancel()
+            try:
+                await self._login_task
+            except asyncio.CancelledError:
+                pass
+        self._login_task = None
         await self._stop_polling()
         await self._stop_proactive()
         await self._stop_interact()
@@ -411,7 +426,7 @@ class DouyinAiBotPlugin(Star):
             return
 
         async with self._comment_lock:
-            yield event.plain_result(f"正在看这个视频，稍等…（下载+抽帧+理解，可能要一两分钟）")
+            yield event.plain_result("正在看这个视频，稍等…（下载+抽帧+理解，可能要一两分钟）")
             try:
                 vc = await fetch_video(aweme_id, int(self._c("frame_count", 6) or 6))
             except Exception as e:
@@ -480,42 +495,92 @@ class DouyinAiBotPlugin(Star):
 
     # ================= 登录 =================
 
-    def _gui_available(self) -> bool:
-        """当前环境能否弹出有界面的浏览器（服务器/无桌面=False）。"""
-        import os
-        import sys
-        if sys.platform == "win32":
-            return os.environ.get("SESSIONNAME", "Console") == "Console"
-        # linux 服务器一般没桌面
-        if os.name == "posix":
-            return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        return True
+    async def _run_login(self, event: AstrMessageEvent):
+        async def send_status(text: str):
+            await event.send(event.plain_result(text))
 
+        scan_timeout = 150
+        sent = False
+
+        async def send_qr(png: bytes):
+            nonlocal sent
+            text = (
+                "二维码已刷新，请扫描最新图片。"
+                if sent
+                else (
+                    f"请用手机抖音扫描二维码并确认登录，发送后等待 {scan_timeout} 秒。"
+                    "若二维码过期，会自动推送新图。"
+                )
+            )
+            await event.send(event.chain_result([Image.fromBytes(png), Plain(text)]))
+            sent = True
+
+        try:
+            scan_timeout = max(30, min(600, int(self._c("qr_scan_timeout", 150))))
+            browser = DouyinBrowser.get(
+                profile_dir=self._profile_dir(),
+                headless=True,
+                channel=str(self._c("browser_channel", "msedge") or ""),
+            )
+            ok = await run_qr_login(
+                browser,
+                send_qr,
+                send_status,
+                prepare_timeout=max(
+                    30, min(600, int(self._c("qr_prepare_timeout", 180)))
+                ),
+                scan_timeout=scan_timeout,
+                slider_attempts=max(1, min(5, int(self._c("qr_slider_attempts", 3)))),
+            )
+            await send_status(
+                "登录成功，登录态已保存。"
+                if ok
+                else "等待扫码确认超时，请重新发送 dy_qr。"
+            )
+        except asyncio.CancelledError:
+            raise
+        except (LoginError, BrowserEnvironmentError) as exc:
+            failure = str(exc)
+        except Exception:
+            logger.exception("[douyin_ai] 二维码登录或消息发送失败")
+            failure = "登录或二维码发送失败，请检查插件日志及 Playwright 浏览器安装后重试。"
+        else:
+            return
+        try:
+            await send_status(failure)
+        except Exception:
+            logger.warning("[douyin_ai] 登录失败通知无法发送")
+
+    async def _start_login(self, event: AstrMessageEvent):
+        self._remember_platform(event)
+        if self._login_task and not self._login_task.done():
+            yield event.plain_result(
+                "已有扫码登录正在进行，请扫描已发送的二维码，或等待本次超时。"
+            )
+            return
+        # 检查和占用之间不 await，防止并发消息启动两个登录任务。
+        self._login_task = asyncio.create_task(
+            self._run_login(event), name="douyin-qr-login"
+        )
+        yield event.plain_result(
+            "正在打开抖音登录页并等待二维码；遇到拼图滑块会自动尝试处理。"
+        )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("dy登录", alias={"抖音登录", "dy扫码"})
     async def cmd_dy_login(self, event: AstrMessageEvent):
-        """抖音登录：本机有桌面就拉浏览器扫码；服务器/无界面环境自动改推二维码图给你手机扫。"""
-        self._remember_platform(event)
-        if not self._gui_available():
-            yield event.plain_result("这边没有浏览器窗口（服务器环境），自动改推二维码，手机抖音扫…")
-            qr, ok = await qr_login_bytes(self._profile_dir(), channel=str(self._c("browser_channel", "msedge") or ""), timeout=150)
-            if ok:
-                yield event.plain_result("扫码成功，登录态已落盘")
-                return
-            if not qr:
-                yield event.plain_result("二维码没截到，换 dy_cookie 贴浏览器 Cookie 也行")
-                return
-            shot = self._data_dir / "dy_login_qr.png"
-            shot.write_bytes(qr)
-            yield MessageChain().file_image(str(shot)).message("扫这个码（150 秒有效）")
-            return
-        yield event.plain_result("拉起浏览器了，用手机抖音扫一下码（180 秒超时）…")
-        ok = await wait_for_login(self._profile_dir(), channel=str(self._c("browser_channel", "msedge") or ""), timeout=180)
-        yield event.plain_result("登录成功，cookie 已落盘，之后自动带登录态" if ok else "登录超时，再来一次（dy登录）")
+        """管理员扫码登录：自动处理拼图滑块，通过后等 5 秒截码并推送。"""
+        async for result in self._start_login(event):
+            yield result
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("dy_cookie", alias={"抖音cookie", "dycookie", "dy导入cookie"})
     async def cmd_dy_cookie(self, event: AstrMessageEvent, raw: str = ""):
         """方式一：贴浏览器里的整段 Cookie（F12-应用程序-Cookie 全选复制）或发文件，直接导入。"""
         self._remember_platform(event)
+        if self._login_task and not self._login_task.done():
+            yield event.plain_result("扫码登录正在进行，请等本次结束后再导入 Cookie。")
+            return
         cookie_str = (raw or "").strip()
         # 用户也可能把 cookie 存成文件发过来（File 段路径在 file_ 属性）
         try:
@@ -529,49 +594,30 @@ class DouyinAiBotPlugin(Star):
             pass
         cookie_str = (cookie_str or "").strip()
         if not cookie_str:
-            yield event.plain_result("用法：dy_cookie <整段Cookie 或发个txt文件>\n（浏览器登录抖音后 F12-应用程序-Cookie，全选复制值粘贴过来）")
+            yield event.plain_result(
+                "用法：dy_cookie <整段Cookie 或发个txt文件>\n（浏览器登录抖音后 F12-应用程序-Cookie，全选复制值粘贴过来）"
+            )
             return
-        has_sid, n = await login_from_cookies(cookie_str, self._profile_dir(), channel=str(self._c("browser_channel", "msedge") or ""))
+        has_sid, n = await login_from_cookies(
+            cookie_str,
+            self._profile_dir(),
+            channel=str(self._c("browser_channel", "msedge") or ""),
+        )
         if n == 0:
-            yield event.plain_result("没解析出任何 cookie，格式不对（要 a=1; b=2 这种整段）")
+            yield event.plain_result(
+                "没解析出任何 cookie，格式不对（要 a=1; b=2 这种整段）"
+            )
             return
         yield event.plain_result(
             f"导入 {n} 条 cookie，登录态：{'有效（sessionid 有了）' if has_sid else '没看到 sessionid（可能没登录或过期），评论/检测可能不生效，重新复制一下'}"
         )
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("dy_qr", alias={"抖音二维码", "dy二维码"})
     async def cmd_dy_qr(self, event: AstrMessageEvent):
-        """方式二：无头浏览器抓登录二维码推过来，手机抖音扫（服务器不用开浏览器窗口）。
-
-        配了「扫码端口」(qr_cdp_port) 时改走 CDP 模式：起一个带远程调试端口的无头浏览器，
-        用户自己浏览器输 `服务器IP:端口` 连进去扫码，扫完自动落盘。
-        """
-        self._remember_platform(event)
-        port = int(self._c("qr_cdp_port", 0) or 0)
-        if port > 0:
-            yield event.plain_result("正在进入浏览器扫码…")
-            yield event.plain_result(
-                f"请在浏览器打开：服务器IP:{port}\n"
-                f"（把「服务器IP」换成你服务器公网/内网地址，例如 1.2.3.4:{port}，"
-                f"进去是 Chrome 调试页，点抖音标签页扫码登录即可，扫完自动落盘）"
-            )
-            ok = await cdp_login(self._profile_dir(), port, channel=str(self._c("browser_channel", "msedge") or ""), timeout=600)
-            yield event.plain_result("扫码成功，登录态已落盘" if ok else "扫码超时或未完成，再发一次 dy_qr 重试")
-            return
-        yield event.plain_result("正在生成登录二维码，稍等…")
-        qr, ok = await qr_login_bytes(self._profile_dir(), channel=str(self._c("browser_channel", "msedge") or ""), timeout=150)
-        if ok:
-            yield event.plain_result("扫码成功，登录态已落盘")
-            return
-        if not qr:
-            yield event.plain_result("二维码没截到，换个方式：dy登录（本机浏览器）或 dy_cookie 贴 cookie")
-            return
-        try:
-            shot = self._data_dir / "dy_login_qr.png"
-            shot.write_bytes(qr)
-            yield MessageChain().file_image(str(shot)).message("用抖音扫这个码（150 秒有效），扫完自动落盘。看不清就 dy登录 走本机浏览器")
-        except Exception as e:
-            yield event.plain_result(f"二维码发送失败：{e}，换 dy登录 吧")
+        """管理员获取服务器登录二维码，发送后自动等待扫码确认。"""
+        async for result in self._start_login(event):
+            yield result
 
     @filter.command("dy状态", alias={"抖音状态", "dy状态"})
     async def cmd_dy_status(self, event: AstrMessageEvent):

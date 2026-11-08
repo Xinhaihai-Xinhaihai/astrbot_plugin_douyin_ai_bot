@@ -1,275 +1,202 @@
-"""抖音扫码登录：拉起非无头浏览器让人扫码，持久化 profile，轮询 sessionid.
-
-抖音没有公开的 Web 扫码登录 API（需要 a_bogus 签名），直接用持久化 profile 最稳：
-扫一次，cookie 落盘，后续开播检测/发评论都自动带登录态。
-"""
+"""共享浏览器扫码登录：等待验证、即时推码、轮询登录并保存会话。"""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from astrbot.api import logger
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from .browser import DouyinBrowser
+from .captcha import CaptchaRejected, find_challenge, refresh_challenge, solve_slider
+from .login_capture import capture_qr, open_login, refresh_qr
 
-async def wait_for_login(profile_dir: Path, channel: str = "msedge", timeout: int = 180) -> bool:
-    """打开非无头浏览器等扫码，返回是否拿到登录态（sessionid cookie）."""
-    from playwright.async_api import async_playwright
+POST_CAPTCHA_DELAY = 5.0
+POLL_INTERVAL = 1.0
 
-    pw = None
-    ctx = None
+
+class LoginError(RuntimeError):
+    """可以向用户展示的登录错误（不包含 cookie 或二维码内容）。"""
+
+
+async def run_qr_login(
+    browser: DouyinBrowser,
+    on_qr: Callable[[bytes], Awaitable[None]],
+    on_status: Callable[[str], Awaitable[None]],
+    *,
+    prepare_timeout: int = 180,
+    scan_timeout: int = 150,
+    slider_attempts: int = 3,
+) -> bool:
     try:
-        pw = await async_playwright().start()
-        kwargs = {
-            "user_data_dir": str(profile_dir),
-            "headless": False,
-            "viewport": {"width": 1280, "height": 900},
-            "locale": "zh-CN",
-        }
-        if channel:
-            kwargs["channel"] = channel
-        try:
-            ctx = await pw.chromium.launch_persistent_context(**kwargs)
-        except Exception:
-            kwargs.pop("channel", None)
-            ctx = await pw.chromium.launch_persistent_context(**kwargs)
+        return await asyncio.wait_for(
+            _run_qr_login(
+                browser,
+                on_qr,
+                on_status,
+                prepare_timeout=prepare_timeout,
+                scan_timeout=scan_timeout,
+                slider_attempts=slider_attempts,
+            ),
+            timeout=prepare_timeout + scan_timeout + 60,
+        )
+    except asyncio.TimeoutError:
+        raise LoginError("登录流程超时，请重新发送 dy_qr。") from None
 
-        page = await ctx.new_page()
-        try:
-            await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30000)
-        except Exception:
-            pass
 
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(2)
-            try:
-                cookies = await ctx.cookies()
-                sid = next((c for c in cookies if c.get("name") == "sessionid" and c.get("value")), None)
-                if sid:
-                    logger.info("[douyin_ai] 扫码登录成功，sessionid 已落盘")
-                    return True
-            except Exception:
+async def _run_qr_login(
+    browser: DouyinBrowser,
+    on_qr: Callable[[bytes], Awaitable[None]],
+    on_status: Callable[[str], Awaitable[None]],
+    *,
+    prepare_timeout: int = 180,
+    scan_timeout: int = 150,
+    slider_attempts: int = 3,
+) -> bool:
+    """二维码就绪即调用 on_qr，随后保持同一页面等待扫码。
+
+    准备和扫码分别计时，二维码刷新不延长总扫码期限。
+    取消、发送失败或超时只关闭登录页，其他任务继续使用共享上下文。
+    """
+    if await browser.is_logged_in():
+        await browser.save_login_state()
+        return True
+    page = await browser.new_page(home=False)
+    page.set_default_timeout(3000)
+    loop = asyncio.get_running_loop()
+    try:
+        try:
+            await page.goto(
+                "https://www.douyin.com/", wait_until="domcontentloaded", timeout=30000
+            )
+        except PlaywrightTimeout:
+            logger.info("[douyin_ai] 首页加载较慢，继续检查已渲染的登录画面")
+        deadline = loop.time() + prepare_timeout
+        scan_deadline = None
+        ready_at = 0.0
+        attempts = 0
+        last_payload = ""
+        last_sent = 0.0
+        last_open = -10.0
+        pending_challenge = False
+        while loop.time() < (scan_deadline or deadline):
+            if page.is_closed():
+                raise LoginError("登录页面已关闭，请重新发送 dy_qr。")
+            if await browser.is_logged_in():
+                await browser.save_login_state()
+                return True
+            challenge = await find_challenge(page)
+            if challenge is not None:
+                if attempts >= slider_attempts:
+                    raise LoginError(
+                        "滑块验证未通过或遇到不支持的验证类型，请稍后重试 dy_qr，或用 dy_cookie 导入登录态。"
+                    )
+                attempts += 1
+                await on_status(
+                    f"检测到滑块验证，正在尝试处理（{attempts}/{slider_attempts}）…"
+                )
+                try:
+                    solved = await solve_slider(page, challenge)
+                except CaptchaRejected as exc:
+                    raise LoginError(str(exc)) from exc
+                except (ValueError, PlaywrightError) as exc:
+                    logger.info(
+                        "[douyin_ai] 滑块尝试 %s 未完成: %s",
+                        attempts,
+                        type(exc).__name__,
+                    )
+                    solved = False
+                pending_challenge = not solved
+                if solved:
+                    ready_at = loop.time() + POST_CAPTCHA_DELAY
+                    await on_status("滑块验证已通过，等待 5 秒后截取登录二维码。")
+                else:
+                    ready_at = loop.time() + POST_CAPTCHA_DELAY
+                    try:
+                        await refresh_challenge(challenge)
+                    except PlaywrightError:
+                        logger.debug("[douyin_ai] 验证框已变化，下一轮重新检测")
+                await asyncio.sleep(POLL_INTERVAL)
                 continue
-        logger.warning("[douyin_ai] 扫码登录超时")
-        return False
-    except Exception as e:
-        logger.warning(f"[douyin_ai] 扫码登录异常: {e}")
+            if pending_challenge:
+                ready_at = loop.time() + POST_CAPTCHA_DELAY
+                pending_challenge = False
+                await on_status("验证框已消失，等待 5 秒后截取登录二维码。")
+            if loop.time() < ready_at:
+                await asyncio.sleep(min(POLL_INTERVAL, ready_at - loop.time()))
+                continue
+            try:
+                if not last_payload and loop.time() - last_open >= 4:
+                    await open_login(page)
+                    last_open = loop.time()
+                await refresh_qr(page)
+                qr = await capture_qr(page)
+            except PlaywrightError:
+                if page.is_closed():
+                    raise LoginError("登录页面已关闭，请重新发送 dy_qr。") from None
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+            if qr is not None and await find_challenge(page) is None:
+                if qr.payload != last_payload and (
+                    not last_payload or loop.time() - last_sent >= 10
+                ):
+                    await on_qr(qr.png)
+                    last_payload, last_sent = qr.payload, loop.time()
+                    if scan_deadline is None:
+                        scan_deadline = loop.time() + scan_timeout
+            await asyncio.sleep(POLL_INTERVAL)
+        if not last_payload:
+            raise LoginError(
+                "等待登录二维码超时，尚未检测到可扫描的二维码。请稍后重试 dy_qr。"
+            )
         return False
     finally:
-        if ctx is not None:
-            try:
-                await ctx.close()
-            except Exception:
-                pass
-        if pw is not None:
-            try:
-                await pw.stop()
-            except Exception:
-                pass
+        await browser.close_page(page)
 
 
 def parse_cookie_string(raw: str) -> list[dict]:
-    """把浏览器复制的整段 Cookie 串（a=1; b=2; ...）转成 Playwright 格式，douyin 域。"""
-    raw = (raw or "").strip()
-    if not raw:
-        return []
+    """将 a=1; b=2 格式 Cookie 转成 Playwright 格式。"""
     items: list[dict] = []
-    for part in raw.split(";"):
-        part = part.strip()
-        if not part or "=" not in part:
+    for part in (raw or "").strip().split(";"):
+        if "=" not in part:
             continue
-        name, _, value = part.partition("=")
-        name = name.strip()
-        value = value.strip()
-        if not name:
-            continue
-        items.append({"name": name, "value": value, "domain": ".douyin.com", "path": "/"})
+        name, _, value = part.strip().partition("=")
+        if name.strip():
+            items.append(
+                {
+                    "name": name.strip(),
+                    "value": value.strip(),
+                    "domain": ".douyin.com",
+                    "path": "/",
+                }
+            )
     return items
 
 
-async def login_from_cookies(cookie_str: str, profile_dir: Path, channel: str = "msedge") -> tuple[bool, int]:
-    """方式一：导入 Cookie。返回 (是否含 sessionid, 导入了几条)。"""
+async def login_from_cookies(
+    cookie_str: str, profile_dir: Path, channel: str = "msedge"
+) -> tuple[bool, int]:
     items = parse_cookie_string(cookie_str)
     if not items:
         return False, 0
     browser = DouyinBrowser.get(profile_dir=profile_dir, headless=True, channel=channel)
-    try:
-        await browser.set_cookies(items)
-    except Exception as e:
-        logger.warning(f"[douyin_ai] 导入 cookie 失败: {e}")
-        return False, 0
-    has_sid = any(i["name"] == "sessionid" and i["value"] for i in items)
-    logger.info(f"[douyin_ai] 导入 {len(items)} 条 cookie，sessionid={'有' if has_sid else '无'}")
+    await browser.set_cookies(items)
+    has_sid = await browser.is_logged_in()
+    if has_sid:
+        await browser.save_login_state()
+    logger.info("[douyin_ai] 导入 %s 条 cookie，sessionid=%s", len(items), has_sid)
     return has_sid, len(items)
 
 
-async def _grab_qr(page) -> bytes:
-    """从登录弹窗里截二维码（PNG 字节），没弹窗返回空 bytes。"""
-    try:
-        for e in await page.query_selector_all("img"):
-            try:
-                src = await e.get_attribute("src") or ""
-            except Exception:
-                continue
-            if src.startswith("data:image") and len(src) > 10000:
-                return await e.screenshot()
-        for c in await page.query_selector_all("canvas"):
-            try:
-                box = await c.bounding_box()
-            except Exception:
-                continue
-            if box and box["width"] >= 100:
-                return await c.screenshot()
-    except Exception:
-        pass
-    return b""
-
-
-async def cdp_login(profile_dir: Path, port: int, channel: str = "msedge", timeout: int = 600) -> bool:
-    """方式三：起一个带 CDP 远程调试端口(0.0.0.0:port)的无头浏览器，用户浏览器输 `IP:port` 连进去扫码。
-
-    适合服务器部署：服务器上没有显示器，把 6199 这类端口放行到公网，
-    用户自己浏览器输 `服务器IP:端口`（devtools 页面）打开抖音扫码，扫码态落盘后返回。
-    """
-    from playwright.async_api import async_playwright
-
-    pw = None
-    ctx = None
-    try:
-        pw = await async_playwright().start()
-        kwargs = {
-            "user_data_dir": str(profile_dir),
-            "headless": True,
-            "viewport": {"width": 1280, "height": 900},
-            "locale": "zh-CN",
-            "args": [
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--remote-debugging-address=0.0.0.0",
-                f"--remote-debugging-port={port}",
-                "--remote-allow-origins=*",
-            ],
-        }
-        if channel:
-            kwargs["channel"] = channel
-        try:
-            ctx = await pw.chromium.launch_persistent_context(**kwargs)
-        except Exception:
-            kwargs.pop("channel", None)
-            ctx = await pw.chromium.launch_persistent_context(**kwargs)
-
-        page = await ctx.new_page()
-        try:
-            await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30000)
-        except Exception:
-            pass
-
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(3)
-            try:
-                cookies = await ctx.cookies()
-                if any(c.get("name") == "sessionid" and c.get("value") for c in cookies):
-                    logger.info("[douyin_ai] CDP 扫码登录成功，sessionid 已落盘")
-                    return True
-            except Exception:
-                continue
-        logger.warning("[douyin_ai] CDP 扫码登录超时")
-        return False
-    except Exception as e:
-        logger.warning(f"[douyin_ai] CDP 扫码登录异常: {e}")
-        return False
-    finally:
-        try:
-            if ctx:
-                await ctx.close()
-        except Exception:
-            pass
-        try:
-            if pw:
-                await pw.stop()
-        except Exception:
-            pass
-
-
-async def qr_login_bytes(profile_dir: Path, channel: str = "msedge", timeout: int = 150) -> tuple[bytes, bool]:
-    """方式二：无头浏览器抓登录二维码。返回 (二维码PNG字节, 是否扫成)。
-
-    先开无头页触发登录弹窗截图二维码，轮询 sessionid，扫成返回 (空字节, True)。
-    """
-    from playwright.async_api import async_playwright
-
-    pw = None
-    ctx = None
-    page = None
-    try:
-        pw = await async_playwright().start()
-        kwargs = {
-            "user_data_dir": str(profile_dir),
-            "headless": True,
-            "viewport": {"width": 1280, "height": 900},
-            "locale": "zh-CN",
-            "args": ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        }
-        if channel:
-            kwargs["channel"] = channel
-        try:
-            ctx = await pw.chromium.launch_persistent_context(**kwargs)
-        except Exception:
-            kwargs.pop("channel", None)
-            ctx = await pw.chromium.launch_persistent_context(**kwargs)
-        page = await ctx.new_page()
-        try:
-            await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30000)
-        except Exception:
-            pass
-        # 点「登录」按钮触发二维码弹窗（没按钮就直接找二维码图）
-        try:
-            btn = await page.query_selector("text=登录")
-            if btn:
-                await btn.click()
-                await page.wait_for_timeout(2500)
-        except Exception:
-            pass
-        qr = await _grab_qr(page)
-        if not qr:
-            qr = await page.screenshot(full_page=False) or b""
-        # 轮询登录态
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(3)
-            try:
-                cookies = await ctx.cookies()
-                if any(c.get("name") == "sessionid" and c.get("value") for c in cookies):
-                    logger.info("[douyin_ai] 二维码登录成功")
-                    return b"", True
-            except Exception:
-                continue
-        logger.warning("[douyin_ai] 二维码登录超时")
-        return qr, False
-    except Exception as e:
-        logger.warning(f"[douyin_ai] 二维码登录异常: {e}")
-        return b"", False
-    finally:
-        try:
-            if ctx:
-                await ctx.close()
-        except Exception:
-            pass
-        try:
-            if pw:
-                await pw.stop()
-        except Exception:
-            pass
-
-
 async def is_logged_in() -> bool:
-    """当前持久化 profile 是否已登录."""
     from astrbot.api.star import StarTools
 
-    profile = Path(StarTools.get_data_dir("astrbot_plugin_douyin_ai_bot")) / "browser_profile"
+    profile = (
+        Path(StarTools.get_data_dir("astrbot_plugin_douyin_ai_bot")) / "browser_profile"
+    )
     if not profile.exists():
         return False
     browser = DouyinBrowser.get(profile_dir=profile, headless=True, channel="msedge")
