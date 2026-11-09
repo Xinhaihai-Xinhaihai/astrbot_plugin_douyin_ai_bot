@@ -22,7 +22,14 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Image, Plain
 from astrbot.api.star import Context, Star, StarTools
 
-from .core.auth import LoginError, is_logged_in, login_from_cookies, run_qr_login
+from .core.auth import (
+    LoginError,
+    is_logged_in,
+    login_from_cookies,
+    login_status,
+    run_manual_login,
+    run_qr_login,
+)
 from .core.browser import DouyinBrowser
 from .core.commenter import generate_comment
 from .core.cooldown import CooldownStore
@@ -98,6 +105,9 @@ class DouyinAiBotPlugin(Star):
 
     def _reload_runtime(self) -> None:
         DouyinBrowser.default_mode = str(self._c("browser_mode", "auto") or "auto")
+        DouyinBrowser.default_cdp_url = str(
+            self._c("browser_cdp_url", "") or ""
+        ).strip()
         try:
             self._data_dir = Path(StarTools.get_data_dir(PLUGIN_DIR_NAME))
             self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -274,7 +284,9 @@ class DouyinAiBotPlugin(Star):
             if not room_id:
                 continue
             try:
-                status = await self._checker.check(room_id, expected_nickname=str(sub.get("nickname", "")))
+                status = await self._checker.check(
+                    room_id, expected_nickname=str(sub.get("nickname", ""))
+                )
             except Exception as e:
                 logger.warning("[douyin_ai] 检测 %s 失败: %s", room_id, e)
                 continue
@@ -373,7 +385,9 @@ class DouyinAiBotPlugin(Star):
             return
         lines = [f"{key}（{sub.get('nickname') or '未填昵称'}）" for key, sub in subs]
         groups = self._store.all_groups()
-        yield event.plain_result("\n".join(lines) + f"\n转发群：{'、'.join(groups) if groups else '未配置'}")
+        yield event.plain_result(
+            "\n".join(lines) + f"\n转发群：{'、'.join(groups) if groups else '未配置'}"
+        )
 
     @filter.command("直播转发", alias={"dy转发"})
     async def cmd_fwd(self, event: AstrMessageEvent, raw: str = ""):
@@ -407,18 +421,28 @@ class DouyinAiBotPlugin(Star):
         msg = (raw or "").strip() or (event.get_message_str() or "").strip()
         aweme_id = parse_aweme_id(msg)
         if not aweme_id:
-            yield event.plain_result("用法：dy评论 <视频链接 或 分享文本>\n例：dy评论 https://v.douyin.com/xxxx/")
+            yield event.plain_result(
+                "用法：dy评论 <视频链接 或 分享文本>\n例：dy评论 https://v.douyin.com/xxxx/"
+            )
             return
 
         # 冷却检查
         if self._cooldown:
-            left = self._cooldown.in_video_cooldown(aweme_id, float(self._c("cooldown_hours", 0) or 0))
+            left = self._cooldown.in_video_cooldown(
+                aweme_id, float(self._c("cooldown_hours", 0) or 0)
+            )
             if left > 0:
-                yield event.plain_result(f"这个视频 {left / 3600:.1f} 小时后再评吧（同视频冷却）")
+                yield event.plain_result(
+                    f"这个视频 {left / 3600:.1f} 小时后再评吧（同视频冷却）"
+                )
                 return
-            gleft = self._cooldown.in_global_cooldown(float(self._c("global_cooldown_minutes", 0) or 0))
+            gleft = self._cooldown.in_global_cooldown(
+                float(self._c("global_cooldown_minutes", 0) or 0)
+            )
             if gleft > 0:
-                yield event.plain_result(f"刚评过，{gleft / 60:.0f} 分钟后再来（全局间隔）")
+                yield event.plain_result(
+                    f"刚评过，{gleft / 60:.0f} 分钟后再来（全局间隔）"
+                )
                 return
 
         if self._comment_lock.locked():
@@ -426,7 +450,9 @@ class DouyinAiBotPlugin(Star):
             return
 
         async with self._comment_lock:
-            yield event.plain_result("正在看这个视频，稍等…（下载+抽帧+理解，可能要一两分钟）")
+            yield event.plain_result(
+                "正在看这个视频，稍等…（下载+抽帧+理解，可能要一两分钟）"
+            )
             try:
                 vc = await fetch_video(aweme_id, int(self._c("frame_count", 6) or 6))
             except Exception as e:
@@ -446,7 +472,9 @@ class DouyinAiBotPlugin(Star):
 
             if not comment_text:
                 cleanup(vc)
-                yield event.plain_result("评论没生成出来（视觉模型没返回？），这次不发了")
+                yield event.plain_result(
+                    "评论没生成出来（视觉模型没返回？），这次不发了"
+                )
                 return
 
             # 发评论（需要登录）
@@ -486,7 +514,11 @@ class DouyinAiBotPlugin(Star):
             chain.message(f"《{title}》\n{status}\n评论：{comment_text}\n{vc.page_url}")
             pushed = await self._share_to_master(chain, aweme_id)
 
-            tail = f"截图已推送到群：{'、'.join(pushed)}" if pushed else "没配推送群（直播转发 <群号>）"
+            tail = (
+                f"截图已推送到群：{'、'.join(pushed)}"
+                if pushed
+                else "没配推送群（直播转发 <群号>）"
+            )
             reply_chain = MessageChain()
             reply_chain.message(f"《{title}》\n{status}\n评论：{comment_text}\n{tail}")
             yield reply_chain
@@ -543,13 +575,78 @@ class DouyinAiBotPlugin(Star):
             failure = str(exc)
         except Exception:
             logger.exception("[douyin_ai] 二维码登录或消息发送失败")
-            failure = "登录或二维码发送失败，请检查插件日志及 Playwright 浏览器安装后重试。"
+            failure = (
+                "登录或二维码发送失败，请检查插件日志及 Playwright 浏览器安装后重试。"
+            )
         else:
             return
         try:
             await send_status(failure)
         except Exception:
             logger.warning("[douyin_ai] 登录失败通知无法发送")
+
+    async def _run_remote_login(self, event: AstrMessageEvent):
+        async def send_status(text: str):
+            await event.send(event.plain_result(text))
+
+        try:
+            timeout = max(
+                120,
+                min(1800, int(self._c("browser_manual_timeout", 600) or 600)),
+            )
+            browser = DouyinBrowser.get(
+                profile_dir=self._profile_dir(),
+                headless=True,
+                channel=str(self._c("browser_channel", "msedge") or ""),
+                cdp_url=str(self._c("browser_cdp_url", "") or "").strip(),
+            )
+            ok = await run_manual_login(browser, send_status, timeout=timeout)
+            await send_status(
+                "服务器已确认登录，登录态已保存。"
+                if ok
+                else "人工登录等待超时。浏览器和登录页仍保留，可继续在 noVNC 中操作。"
+            )
+        except asyncio.CancelledError:
+            raise
+        except LoginError as exc:
+            await send_status(str(exc))
+        except Exception:
+            logger.exception("[douyin_ai] 服务器人工登录失败")
+            await send_status(
+                "服务器浏览器连接失败，请检查 Chromium 服务、browser_cdp_url 和网络。"
+            )
+
+    async def _start_remote_login(self, event: AstrMessageEvent):
+        self._remember_platform(event)
+        cdp_url = str(self._c("browser_cdp_url", "") or "").strip()
+        vnc_url = str(self._c("browser_vnc_url", "") or "").strip()
+        if not cdp_url:
+            yield event.plain_result(
+                "未配置 browser_cdp_url。请先按 README 启动 Chromium/noVNC 服务，"
+                "再填写容器内 CDP 地址（例如 http://douyin-browser:9222）。"
+            )
+            return
+        if not vnc_url:
+            yield event.plain_result(
+                "未配置 browser_vnc_url。请填写管理员可访问的 noVNC 完整地址后再试。"
+            )
+            return
+        if self._login_task and not self._login_task.done():
+            yield event.plain_result(
+                "已有登录正在进行，请先完成当前验证或等待本次超时。"
+            )
+            return
+        timeout = max(
+            120,
+            min(1800, int(self._c("browser_manual_timeout", 600) or 600)),
+        )
+        self._login_task = asyncio.create_task(
+            self._run_remote_login(event), name="douyin-remote-login"
+        )
+        yield event.plain_result(
+            f"服务器登录页正在打开。请在 {timeout} 秒内访问：\n{vnc_url}\n"
+            "完成扫码、短信或滑块验证后，插件会自动确认并保存登录态。"
+        )
 
     async def _start_login(self, event: AstrMessageEvent):
         self._remember_platform(event)
@@ -569,8 +666,22 @@ class DouyinAiBotPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("dy登录", alias={"抖音登录", "dy扫码"})
     async def cmd_dy_login(self, event: AstrMessageEvent):
-        """管理员扫码登录：自动处理拼图滑块，通过后等 5 秒截码并推送。"""
-        async for result in self._start_login(event):
+        """管理员登录；配置服务器浏览器时优先使用 noVNC 人工接管。"""
+        starter = (
+            self._start_remote_login(event)
+            if str(self._c("browser_cdp_url", "") or "").strip()
+            else self._start_login(event)
+        )
+        async for result in starter:
+            yield result
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command(
+        "dy_remote_login", alias={"dy服务器登录", "dy人工登录", "dy远程登录"}
+    )
+    async def cmd_dy_remote_login(self, event: AstrMessageEvent):
+        """管理员通过 noVNC 在服务器浏览器中完成抖音人工验证。"""
+        async for result in self._start_remote_login(event):
             yield result
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -609,7 +720,12 @@ class DouyinAiBotPlugin(Star):
             )
             return
         yield event.plain_result(
-            f"导入 {n} 条 cookie，登录态：{'有效（sessionid 有了）' if has_sid else '没看到 sessionid（可能没登录或过期），评论/检测可能不生效，重新复制一下'}"
+            f"导入 {n} 条 cookie，登录态："
+            + (
+                "已由抖音页面确认有效。"
+                if has_sid
+                else "尚未确认。请发送 dy状态；只有 sessionid 不代表服务端会话仍有效。"
+            )
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -623,12 +739,19 @@ class DouyinAiBotPlugin(Star):
     async def cmd_dy_status(self, event: AstrMessageEvent):
         """查看当前状态：订阅数 / 转发群 / 登录态 / 主动刷 / 互动开关。"""
         subs = self._store.all_subs()
-        lines = [f"订阅 {len(subs)} 个，转发群 {'、'.join(self._store.all_groups()) or '未配置'}"]
+        lines = [
+            f"订阅 {len(subs)} 个，转发群 {'、'.join(self._store.all_groups()) or '未配置'}"
+        ]
         try:
-            if await is_logged_in():
-                lines.append("登录态：有效")
+            verified, reason = await login_status(self._profile_dir())
+            if verified:
+                lines.append("登录态：已由抖音页面确认")
+            elif reason == "cookie_only":
+                lines.append(
+                    "登录态：仅有 Cookie，抖音页面尚未确认有效；请使用 dy_remote_login 重新验证。"
+                )
             else:
-                lines.append("登录态：未登录（dy登录 / dy_qr / dy_cookie 三选一）")
+                lines.append("登录态：未登录（服务器部署请用 dy_remote_login）")
         except Exception as e:
             lines.append(f"登录态检查失败：{e}")
         yield event.plain_result("\n".join(lines))
@@ -654,7 +777,11 @@ class DouyinAiBotPlugin(Star):
             try:
                 # proactive_interval 单位是分钟（1.3.4 起），兑底最少 3 分钟
                 await asyncio.sleep(max(180, self._interval_minutes() * 60))
-                if not self._proactive_running or self._proactive_busy or not self._enabled():
+                if (
+                    not self._proactive_running
+                    or self._proactive_busy
+                    or not self._enabled()
+                ):
                     continue
                 self._proactive_busy = True
                 await self._proactive_once()
@@ -676,8 +803,11 @@ class DouyinAiBotPlugin(Star):
         candidates: list[tuple[str, bool]] = []  # (aweme_id, is_special)
         seen_ids: set[str] = set()
         specials = self._store.all_special()
-        browser = DouyinBrowser.get(profile_dir=self._profile_dir(), headless=True,
-                                    channel=str(self._c("browser_channel", "msedge") or ""))
+        browser = DouyinBrowser.get(
+            profile_dir=self._profile_dir(),
+            headless=True,
+            channel=str(self._c("browser_channel", "msedge") or ""),
+        )
         try:
             for sid in specials:
                 for aid in await fetch_user_videos(sid, 3, browser):
@@ -704,11 +834,16 @@ class DouyinAiBotPlugin(Star):
                 logger.warning("[douyin_ai] 推荐流兜底失败: %s", e)
 
         if not candidates:
-            logger.warning("[douyin_ai] 本轮没刷到任何候选视频（订阅没抓到 + 推荐流失败）")
+            logger.warning(
+                "[douyin_ai] 本轮没刷到任何候选视频（订阅没抓到 + 推荐流失败）"
+            )
             try:
-                await self._share_to_master(MessageChain().message(
-                    "⚠ 主动刷本轮没刷到任何视频：订阅的号抓不到作品，推荐流也失败（可能登录态掉了，试试 dy_qr 重新登录）"
-                ), "no_candidates")
+                await self._share_to_master(
+                    MessageChain().message(
+                        "⚠ 主动刷本轮没刷到任何视频：订阅的号抓不到作品，推荐流也失败（可能登录态掉了，试试 dy_qr 重新登录）"
+                    ),
+                    "no_candidates",
+                )
             except Exception:
                 pass
             return
@@ -718,11 +853,15 @@ class DouyinAiBotPlugin(Star):
         for aweme_id, is_special in candidates:
             if picked >= n:
                 break
-            if self._seen and (self._seen.is_seen(aweme_id) or self._seen.is_commented(aweme_id)):
+            if self._seen and (
+                self._seen.is_seen(aweme_id) or self._seen.is_commented(aweme_id)
+            ):
                 continue
             self._seen.mark_seen(aweme_id)
             picked += 1
-            logger.info("[douyin_ai] 主动看视频 %s（特别关心=%s）", aweme_id, is_special)
+            logger.info(
+                "[douyin_ai] 主动看视频 %s（特别关心=%s）", aweme_id, is_special
+            )
             try:
                 vc = await fetch_video(aweme_id, int(self._c("frame_count", 6) or 6))
             except Exception as e:
@@ -730,18 +869,29 @@ class DouyinAiBotPlugin(Star):
                 continue
             score, reason = 0, ""
             try:
-                score, reason = await score_video(vc, self._taste_words(), is_special, self.context, self.cfg)
+                score, reason = await score_video(
+                    vc, self._taste_words(), is_special, self.context, self.cfg
+                )
             except Exception as e:
                 logger.warning("[douyin_ai] 评分 %s 失败: %s", aweme_id, e)
             logger.info("[douyin_ai] %s 打分 %.0f（%s）", vc.title[:20], score, reason)
-            round_entries.append({
-                "aweme_id": aweme_id, "title": vc.title, "owner": vc.owner,
-                "special": is_special, "score": score, "reason": reason,
-"liked": False, "link": vc.page_url, "threshold": min_score,
-            })
+            round_entries.append(
+                {
+                    "aweme_id": aweme_id,
+                    "title": vc.title,
+                    "owner": vc.owner,
+                    "special": is_special,
+                    "score": score,
+                    "reason": reason,
+                    "liked": False,
+                    "link": vc.page_url,
+                    "threshold": min_score,
+                }
+            )
 
             if score < min_score:
                 from .core.douyin import cleanup
+
                 cleanup(vc)
                 continue
 
@@ -749,7 +899,12 @@ class DouyinAiBotPlugin(Star):
             comment_text = ""
             if self._c("proactive_comment", True):
                 try:
-                    comment_text = await generate_comment(vc, str(self._c("comment_style", "") or ""), self.context, self.cfg)
+                    comment_text = await generate_comment(
+                        vc,
+                        str(self._c("comment_style", "") or ""),
+                        self.context,
+                        self.cfg,
+                    )
                 except Exception:
                     pass
             sent = False
@@ -757,7 +912,10 @@ class DouyinAiBotPlugin(Star):
                 try:
                     if await is_logged_in():
                         from .core.douyin import send_comment
-                        gleft = self._cooldown.in_global_cooldown(float(self._c("global_cooldown_minutes", 0) or 0))
+
+                        gleft = self._cooldown.in_global_cooldown(
+                            float(self._c("global_cooldown_minutes", 0) or 0)
+                        )
                         if gleft <= 0:
                             await send_comment(aweme_id, comment_text)
                             sent = True
@@ -768,9 +926,16 @@ class DouyinAiBotPlugin(Star):
 
             # 截图 + 分享主人
             shot = await compose_screenshot(
-                cover_url=vc.cover, frames=list(vc.frames), title=vc.title or "（标题没抓到）",
-                owner=vc.owner, bvid=aweme_id, comment=comment_text, stat=vc.stat,
-                top_comments=list(vc.top_comments), link=vc.page_url, meta_prefix="作者",
+                cover_url=vc.cover,
+                frames=list(vc.frames),
+                title=vc.title or "（标题没抓到）",
+                owner=vc.owner,
+                bvid=aweme_id,
+                comment=comment_text,
+                stat=vc.stat,
+                top_comments=list(vc.top_comments),
+                link=vc.page_url,
+                meta_prefix="作者",
             )
             chain = MessageChain()
             if shot and Path(shot).exists():
@@ -783,19 +948,28 @@ class DouyinAiBotPlugin(Star):
             )
             await self._share_to_master(chain, aweme_id)
             from .core.douyin import cleanup
+
             cleanup(vc)
 
-# 本轮打分汇总：每轮刷完都推一张完整评分统计（过线的也在卡里标出来）
+        # 本轮打分汇总：每轮刷完都推一张完整评分统计（过线的也在卡里标出来）
         if round_entries:
             try:
                 shot = await compose_score_card(round_entries)
                 if shot and Path(shot).exists():
                     top = max(e.get("score", 0) for e in round_entries)
-                    passed_n = sum(1 for e in round_entries if e.get("score", 0) >= min_score)
+                    passed_n = sum(
+                        1 for e in round_entries if e.get("score", 0) >= min_score
+                    )
                     chain = MessageChain()
                     chain.file_image(shot)
-                    tail = f"，{passed_n} 个过线" if passed_n else f"，没到 {min_score:.0f} 分线"
-                    chain.message(f"本轮主动刷 {len(round_entries)} 个视频，最高 {top:.0f} 分{tail}")
+                    tail = (
+                        f"，{passed_n} 个过线"
+                        if passed_n
+                        else f"，没到 {min_score:.0f} 分线"
+                    )
+                    chain.message(
+                        f"本轮主动刷 {len(round_entries)} 个视频，最高 {top:.0f} 分{tail}"
+                    )
                     await self._share_to_master(chain, "score_summary")
             except Exception as e:
                 logger.warning("[douyin_ai] 本轮打分汇总推送失败: %s", e)
@@ -825,8 +999,14 @@ class DouyinAiBotPlugin(Star):
     async def _interact_loop(self):
         while True:
             try:
-                await asyncio.sleep(max(120, int(self._c("interact_interval", 300) or 300)))
-                if not self._interact_running or self._interact_busy or not self._enabled():
+                await asyncio.sleep(
+                    max(120, int(self._c("interact_interval", 300) or 300))
+                )
+                if (
+                    not self._interact_running
+                    or self._interact_busy
+                    or not self._enabled()
+                ):
                     continue
                 self._interact_busy = True
                 await self._interact_once()
@@ -841,8 +1021,11 @@ class DouyinAiBotPlugin(Star):
         from .core.browser import DouyinBrowser
 
         try:
-            browser = DouyinBrowser.get(profile_dir=self._profile_dir(), headless=True,
-                                        channel=str(self._c("browser_channel", "msedge") or ""))
+            browser = DouyinBrowser.get(
+                profile_dir=self._profile_dir(),
+                headless=True,
+                channel=str(self._c("browser_channel", "msedge") or ""),
+            )
         except Exception as e:
             logger.warning("[douyin_ai] 互动开浏览器失败: %s", e)
             return
@@ -876,7 +1059,9 @@ class DouyinAiBotPlugin(Star):
         if self._c("reply_notify", True) and self._seen:
             try:
                 recent = [k for k, _ in self._seen.recent_commented(5)]
-                replies = await poll_comment_replies(browser, recent, self._interact_state)
+                replies = await poll_comment_replies(
+                    browser, recent, self._interact_state
+                )
                 for r in replies:
                     chain = MessageChain().message(
                         f"有人回复你的评论啦：{r['replier']} 说「{r['text']}」\n"
@@ -918,19 +1103,27 @@ class DouyinAiBotPlugin(Star):
         live_ones = []
         for key2, sub in subs:
             room_id = sub.get("room_id") or DouyinLiveChecker.extract_room_id(key2)
-            if not room_id and re.fullmatch(r"[A-Za-z0-9_.]+", key2) and not key2.isdigit():
+            if (
+                not room_id
+                and re.fullmatch(r"[A-Za-z0-9_.]+", key2)
+                and not key2.isdigit()
+            ):
                 room_id, _ = await DouyinLiveChecker.lock_room_by_short_id(key2)
             if not room_id:
                 continue
             try:
-                status = await self._checker.check(room_id, expected_nickname=str(sub.get("nickname", "")))
+                status = await self._checker.check(
+                    room_id, expected_nickname=str(sub.get("nickname", ""))
+                )
             except Exception:
                 continue
             await self._store.set_live_state(key2, status.live)
             if status.live:
                 live_ones.append(status)
         if not live_ones:
-            yield event.plain_result(str(self._c("not_live_text", "") or "都没在播呢（）"))
+            yield event.plain_result(
+                str(self._c("not_live_text", "") or "都没在播呢（）")
+            )
             return
         for status in live_ones:
             yield await self._build_live_result(status)
@@ -973,13 +1166,19 @@ class DouyinAiBotPlugin(Star):
             self.cfg.save_config()
         except Exception:
             pass
-        yield event.plain_result(f"已删除触发词「{word}」，剩余：{'、'.join(words) if words else '无'}")
+        yield event.plain_result(
+            f"已删除触发词「{word}」，剩余：{'、'.join(words) if words else '无'}"
+        )
 
     @filter.command("触发词列表", alias={"dy触发词"})
     async def cmd_trigger_list(self, event: AstrMessageEvent):
         """查看当前全部触发词。"""
         words = self._trigger_words()
-        yield event.plain_result("触发词：" + "、".join(words) if words else "还没配触发词（添加触发词 <词>）")
+        yield event.plain_result(
+            "触发词：" + "、".join(words)
+            if words
+            else "还没配触发词（添加触发词 <词>）"
+        )
 
     # ================= 主动刷视频命令 =================
 
@@ -992,7 +1191,9 @@ class DouyinAiBotPlugin(Star):
             self._c_set("proactive_enabled", True)
             self._proactive_running = True
             self._start_proactive()
-            yield event.plain_result(f"主动刷已开启：每 {self._interval_minutes()} 分钟刷 {self._c('proactive_batch', 3)} 个，打分 ≥{self._c('score_threshold', 7)} 才评论，过线推给你")
+            yield event.plain_result(
+                f"主动刷已开启：每 {self._interval_minutes()} 分钟刷 {self._c('proactive_batch', 3)} 个，打分 ≥{self._c('score_threshold', 7)} 才评论，过线推给你"
+            )
             return
         if raw in ("关", "关闭", "off"):
             self._c_set("proactive_enabled", False)
@@ -1010,7 +1211,9 @@ class DouyinAiBotPlugin(Star):
             self._proactive_busy = True
             try:
                 await self._proactive_once()
-                yield event.plain_result("刷完一轮了，过线的都推过了（没推就是都没过线）")
+                yield event.plain_result(
+                    "刷完一轮了，过线的都推过了（没推就是都没过线）"
+                )
             finally:
                 self._proactive_busy = False
             return
@@ -1040,11 +1243,15 @@ class DouyinAiBotPlugin(Star):
         raw = (raw or "").strip()
         if not raw:
             cur = self._taste_words()
-            yield event.plain_result("当前口味：" + ("、".join(cur) if cur else "没设（打分走通用标准）"))
+            yield event.plain_result(
+                "当前口味：" + ("、".join(cur) if cur else "没设（打分走通用标准）")
+            )
             return
         words = [w.strip() for w in re.split(r"[,，、\s]+", raw) if w.strip()]
         self._c_set("taste_words", words)
-        yield event.plain_result(f"口味已更新：{'、'.join(words)}（打分时匹配这些主题的会加分）")
+        yield event.plain_result(
+            f"口味已更新：{'、'.join(words)}（打分时匹配这些主题的会加分）"
+        )
 
     @filter.command("dy特别关心", alias={"抖音特别关心", "特别关心"})
     async def cmd_special(self, event: AstrMessageEvent, raw: str = ""):
@@ -1053,7 +1260,11 @@ class DouyinAiBotPlugin(Star):
         raw = (raw or "").strip()
         if not raw:
             sp = self._store.all_special()
-            yield event.plain_result("特别关心：" + ("、".join(sp) if sp else "没设") + "\n（用法：dy特别关心 <抖音号> / 删 <抖音号>）")
+            yield event.plain_result(
+                "特别关心："
+                + ("、".join(sp) if sp else "没设")
+                + "\n（用法：dy特别关心 <抖音号> / 删 <抖音号>）"
+            )
             return
         if raw.startswith("删"):
             target = raw[1:].strip()
@@ -1064,7 +1275,9 @@ class DouyinAiBotPlugin(Star):
             yield event.plain_result("要填抖音号（如 Lianmin726），别填名字")
             return
         await self._store.add_special(raw)
-        yield event.plain_result(f"已特别关心 {raw}：主动刷时优先看 ta 的新视频，打分 +1 保底，过线推给你")
+        yield event.plain_result(
+            f"已特别关心 {raw}：主动刷时优先看 ta 的新视频，打分 +1 保底，过线推给你"
+        )
 
     @filter.command("dy主人", alias={"抖音主人", "设主人"})
     async def cmd_master(self, event: AstrMessageEvent, raw: str = ""):
@@ -1072,7 +1285,11 @@ class DouyinAiBotPlugin(Star):
         self._remember_platform(event)
         raw = (raw or "").strip()
         if not raw:
-            yield event.plain_result("当前主人 QQ：" + (self._master_user_id() or "没设") + "\n（用法：dy主人 <QQ号> 推送都走转发群）")
+            yield event.plain_result(
+                "当前主人 QQ："
+                + (self._master_user_id() or "没设")
+                + "\n（用法：dy主人 <QQ号> 推送都走转发群）"
+            )
             return
         if not raw.isdigit():
             yield event.plain_result("要填 QQ 号数字")
@@ -1091,7 +1308,9 @@ class DouyinAiBotPlugin(Star):
             self._c_set("interact_enabled", True)
             self._interact_running = True
             self._start_interact()
-            yield event.plain_result(f"互动已开启：每 {int(self._c('interact_interval', 300)) // 60} 分钟轮询一次，新私信/评论被回复都推给主人")
+            yield event.plain_result(
+                f"互动已开启：每 {int(self._c('interact_interval', 300)) // 60} 分钟轮询一次，新私信/评论被回复都推给主人"
+            )
             return
         if raw in ("关", "关闭", "off"):
             self._c_set("interact_enabled", False)
@@ -1105,21 +1324,33 @@ class DouyinAiBotPlugin(Star):
                 yield event.plain_result("要回什么内容？")
                 return
             # 找到最近一条私信会话
-            recent = sorted(self._interact_state.data.get("seen_conv_ts", {}).items(), key=lambda x: x[1], reverse=True)
+            recent = sorted(
+                self._interact_state.data.get("seen_conv_ts", {}).items(),
+                key=lambda x: x[1],
+                reverse=True,
+            )
             if not recent:
                 yield event.plain_result("没看到私信会话记录，等互动轮过一次再用")
                 return
             conv_name = recent[0][0]
             ok = await self._send_dm_to(conv_name, text)
-            yield event.plain_result(f"已回 {conv_name}：{text}" if ok else "没发出去（可能没登录或会话找不到了）")
+            yield event.plain_result(
+                f"已回 {conv_name}：{text}"
+                if ok
+                else "没发出去（可能没登录或会话找不到了）"
+            )
             return
         yield event.plain_result("用法：dy互动 开 / 关 / 私信回复 <内容>")
 
     async def _send_dm_to(self, conv_name: str, text: str) -> bool:
         from .core.browser import DouyinBrowser
+
         try:
-            browser = DouyinBrowser.get(profile_dir=self._profile_dir(), headless=True,
-                                        channel=str(self._c("browser_channel", "msedge") or ""))
+            browser = DouyinBrowser.get(
+                profile_dir=self._profile_dir(),
+                headless=True,
+                channel=str(self._c("browser_channel", "msedge") or ""),
+            )
             return await send_dm(browser, conv_name, text)
         except Exception as e:
             logger.warning("[douyin_ai] 发私信异常: %s", e)
@@ -1136,5 +1367,7 @@ class DouyinAiBotPlugin(Star):
             f"互动：{'开' if self._interact_running else '关'}（间隔 {int(self._c('interact_interval', 300)) // 60} 分钟）",
         ]
         if self._seen:
-            lines.append(f"历史：看过 {len(self._seen._data.get('seen', {}))} 个，评过 {len(self._seen._data.get('commented', {}))} 个")
+            lines.append(
+                f"历史：看过 {len(self._seen._data.get('seen', {}))} 个，评过 {len(self._seen._data.get('commented', {}))} 个"
+            )
         yield event.plain_result("\n".join(lines))

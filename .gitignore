@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 .ruff_cache/
 data/
+.env.browser
+docker/browser/profile/

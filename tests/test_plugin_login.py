@@ -106,3 +106,34 @@ async def test_notification_failure_does_not_leave_unobserved_task_error(
     monkeypatch.setattr(plugin_module.DouyinBrowser, "get", lambda **kwargs: object())
     event.send.side_effect = RuntimeError("transport unavailable")
     await plugin._run_login(event)
+
+
+async def test_remote_login_requires_cdp_configuration(plugin, event):
+    plugin._c = lambda key, default=None: default
+    results = [item async for item in plugin._start_remote_login(event)]
+    assert "browser_cdp_url" in results[0].chain[0].text
+    assert plugin._login_task is None
+
+
+async def test_remote_login_returns_vnc_url_and_starts_background_task(plugin, event):
+    values = {
+        "browser_cdp_url": "http://douyin-browser:9222",
+        "browser_vnc_url": "https://vnc.example.test/vnc.html",
+        "browser_manual_timeout": 600,
+    }
+    plugin._c = lambda key, default=None: values.get(key, default)
+    started = asyncio.Event()
+
+    async def wait(event):
+        started.set()
+        await asyncio.Event().wait()
+
+    plugin._run_remote_login = wait
+    results = [item async for item in plugin._start_remote_login(event)]
+    task = plugin._login_task
+    await started.wait()
+    text = results[0].chain[0].text
+    assert "https://vnc.example.test/vnc.html" in text
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

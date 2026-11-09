@@ -1,0 +1,25 @@
+services:
+  douyin-browser:
+    build:
+      context: ./docker/browser
+    image: astrbot-douyin-browser:1.4.1
+    container_name: astrbot-douyin-browser
+    restart: unless-stopped
+    shm_size: 1gb
+    environment:
+      VNC_PASSWORD: ${VNC_PASSWORD:?Set VNC_PASSWORD in .env.browser}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - douyin-browser-profile:/home/chromium/profile
+    ports:
+      - "${VNC_BIND_ADDR:-127.0.0.1}:${NOVNC_PORT:-6080}:6080"
+    networks:
+      - astrbot
+
+volumes:
+  douyin-browser-profile:
+
+networks:
+  astrbot:
+    external: true
+    name: ${ASTRBOT_NETWORK:-astrbot_default}

@@ -13,7 +13,9 @@
   "trigger_words": {
     "description": "触发词",
     "type": "list",
-    "default": ["看看腿"],
+    "default": [
+      "看看腿"
+    ],
     "hint": "群聊消息里包含其中任意一个词时，即时检查已订阅主播并回复正在直播的。在下方逐个添加。"
   },
   "sub_short_ids": {
@@ -44,7 +46,11 @@
     "description": "轮询间隔秒数",
     "type": "int",
     "default": 300,
-    "slider": {"min": 60, "max": 3600, "step": 30},
+    "slider": {
+      "min": 60,
+      "max": 3600,
+      "step": 30
+    },
     "hint": "每 N 秒轮询一次全部订阅主播的开播状态，开播时推送到转发群。建议 300。"
   },
   "fetch_cover": {
@@ -53,7 +59,6 @@
     "default": true,
     "hint": "发送直播间链接时同时带上封面图。"
   },
-
   "_video_section": {
     "description": "=== 陪看评论（发视频链接→看视频→发评论） ===",
     "type": "text",
@@ -69,7 +74,11 @@
     "description": "抽帧数量",
     "type": "int",
     "default": 6,
-    "slider": {"min": 1, "max": 12, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 12,
+      "step": 1
+    },
     "hint": "喂给视觉模型的截图张数。越多越懂视频、越费 token。建议 4-8。"
   },
   "comment_style": {
@@ -82,14 +91,22 @@
     "description": "同视频冷却（小时）",
     "type": "int",
     "default": 24,
-    "slider": {"min": 0, "max": 720, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 720,
+      "step": 1
+    },
     "hint": "对同一个视频，N 小时内只评一次。0=不限制。"
   },
   "global_cooldown_minutes": {
     "description": "全局评论间隔（分钟）",
     "type": "int",
     "default": 30,
-    "slider": {"min": 0, "max": 1440, "step": 5},
+    "slider": {
+      "min": 0,
+      "max": 1440,
+      "step": 5
+    },
     "hint": "任意两次评论之间的最少间隔，模拟真人不密集发言。"
   },
   "notify_groups": {
@@ -98,7 +115,6 @@
     "default": [],
     "hint": "forward_groups 没配时的兜底推送群（QQ 群号数字，下方逐个添加）。正常只填 forward_groups 就行。"
   },
-
   "_vision_section": {
     "description": "=== 视觉模型 ===",
     "type": "text",
@@ -126,10 +142,13 @@
     "description": "视觉调用超时（秒）",
     "type": "int",
     "default": 120,
-    "slider": {"min": 20, "max": 600, "step": 10},
+    "slider": {
+      "min": 20,
+      "max": 600,
+      "step": 10
+    },
     "hint": "看图比较慢，建议 120 以上。"
   },
-
   "_auth_section": {
     "description": "=== 登录与浏览器 ===",
     "type": "text",
@@ -151,8 +170,35 @@
     "description": "浏览器运行模式",
     "type": "string",
     "default": "auto",
-    "options": ["auto", "headed", "headless"],
+    "options": [
+      "auto",
+      "headed",
+      "headless"
+    ],
     "hint": "推荐 auto：使用普通浏览器，Linux 无显示环境时自动启动 Xvfb（需安装 xvfb）。headless 无需显示依赖，但可能被抖音拒绝验证。修改后重载插件生效。"
+  },
+  "browser_cdp_url": {
+    "description": "服务器浏览器 CDP 地址",
+    "type": "string",
+    "default": "",
+    "hint": "可选。使用独立 Chromium 人工接管登录时填写容器内地址，例如 http://douyin-browser:9222。不要把 9222 端口公开到公网；修改后重载插件。"
+  },
+  "browser_vnc_url": {
+    "description": "noVNC 管理地址",
+    "type": "string",
+    "default": "",
+    "hint": "管理员访问的 noVNC 完整地址，例如 http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale。远程使用请走 HTTPS 和身份认证。"
+  },
+  "browser_manual_timeout": {
+    "description": "服务器人工登录超时（秒）",
+    "type": "int",
+    "default": 600,
+    "slider": {
+      "min": 120,
+      "max": 1800,
+      "step": 30
+    },
+    "hint": "dy_remote_login 等待管理员在 noVNC 中完成扫码、短信或滑块验证的时间。超时后浏览器页面会保留。"
   },
   "qr_cdp_port": {
     "description": "旧版浏览器扫码端口（已停用）",
@@ -165,24 +211,35 @@
     "description": "等待登录二维码超时（秒）",
     "type": "int",
     "default": 180,
-    "slider": {"min": 30, "max": 600, "step": 10},
+    "slider": {
+      "min": 30,
+      "max": 600,
+      "step": 10
+    },
     "hint": "等待页面和二维码加载、处理拼图滑块。验证通过后固定等待 5 秒再截图。"
   },
   "qr_scan_timeout": {
     "description": "发送二维码后等待扫码（秒）",
     "type": "int",
     "default": 150,
-    "slider": {"min": 30, "max": 600, "step": 10},
+    "slider": {
+      "min": 30,
+      "max": 600,
+      "step": 10
+    },
     "hint": "从第一张二维码发送成功后计时。手机扫码后需确认登录；二维码刷新不会延长总等待时间。"
   },
   "qr_slider_attempts": {
     "description": "拼图滑块最大尝试次数",
     "type": "int",
     "default": 3,
-    "slider": {"min": 1, "max": 5, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 5,
+      "step": 1
+    },
     "hint": "自动识别缺口并拖动，只有验证框消失才继续。失败到达上限后结束本次登录并提示。"
   },
-
   "_proactive_section": {
     "description": "=== 主动刷视频 ===",
     "type": "text",
@@ -198,21 +255,33 @@
     "description": "主动刷间隔（分钟）",
     "type": "int",
     "default": 15,
-    "slider": {"min": 1, "max": 1440, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 1440,
+      "step": 1
+    },
     "hint": "每 N 分钟刷一轮。建议 15~60。"
   },
   "proactive_batch": {
     "description": "每轮刷几个视频",
     "type": "int",
     "default": 3,
-    "slider": {"min": 1, "max": 10, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 10,
+      "step": 1
+    },
     "hint": "每轮看的视频数量。越多越费 token 和流量。"
   },
   "score_threshold": {
     "description": "评论打分门槛",
     "type": "int",
     "default": 7,
-    "slider": {"min": 0, "max": 10, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 10,
+      "step": 1
+    },
     "hint": "视觉模型给视频打 0-10 分，≥ 这个分才发评论并分享。0=全评（慎用）。"
   },
   "proactive_comment": {
@@ -233,7 +302,6 @@
     "default": "",
     "hint": "主人 QQ 号（备用标识）。推送统一走 forward_groups 群，不再私聊。"
   },
-
   "_interact_section": {
     "description": "=== 互动（私信/评论回复） ===",
     "type": "text",
@@ -249,7 +317,11 @@
     "description": "互动轮询间隔（秒）",
     "type": "int",
     "default": 300,
-    "slider": {"min": 120, "max": 3600, "step": 60},
+    "slider": {
+      "min": 120,
+      "max": 3600,
+      "step": 60
+    },
     "hint": "每 N 秒轮询一次私信和评论回复。"
   },
   "dm_notify": {

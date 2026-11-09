@@ -4,6 +4,8 @@ import base64
 import io
 import os
 import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import cv2
 import numpy as np
@@ -162,7 +164,13 @@ async def test_real_browser_slider_iframe_delay_send_and_save(browser):
                     "value": "TEST_ONLY",
                     "domain": ".douyin.com",
                     "path": "/",
-                }
+                },
+                {
+                    "name": "LOGIN_STATUS",
+                    "value": "1",
+                    "domain": ".douyin.com",
+                    "path": "/",
+                },
             ]
         )
 
@@ -186,7 +194,13 @@ async def test_restores_session_cookie_after_browser_restart(browser):
                 "value": "TEST_ONLY",
                 "domain": ".douyin.com",
                 "path": "/",
-            }
+            },
+            {
+                "name": "LOGIN_STATUS",
+                "value": "1",
+                "domain": ".douyin.com",
+                "path": "/",
+            },
         ]
     )
     await browser.save_login_state()
@@ -235,3 +249,66 @@ def test_session_cookie_requires_matching_domain_and_expiry():
     assert DouyinBrowser._has_session([cookie])
     assert not DouyinBrowser._has_session([{**cookie, "domain": ".example.com"}])
     assert not DouyinBrowser._has_session([{**cookie, "expires": time.time() - 1}])
+
+
+async def test_session_cookie_alone_is_not_treated_as_confirmed_login():
+    instance = object.__new__(DouyinBrowser)
+    instance.cdp_url = ""
+    instance.cookies = AsyncMock(
+        return_value=[
+            {
+                "name": "sessionid",
+                "value": "TEST_ONLY",
+                "domain": ".douyin.com",
+                "expires": -1,
+            }
+        ]
+    )
+    page = SimpleNamespace(
+        is_closed=Mock(return_value=False),
+        url="https://www.douyin.com/",
+        wait_for_timeout=AsyncMock(),
+        evaluate=AsyncMock(return_value=False),
+        close=AsyncMock(),
+    )
+    instance._ctx = SimpleNamespace(pages=[page])
+    assert not await instance.is_logged_in()
+    page.evaluate.assert_awaited_once()
+
+
+async def test_cdp_reuses_context_without_starting_xvfb(tmp_path, monkeypatch):
+    context = SimpleNamespace(
+        pages=[],
+        set_default_timeout=Mock(),
+        cookies=AsyncMock(return_value=[]),
+        add_cookies=AsyncMock(),
+        close=AsyncMock(),
+    )
+    remote_browser = SimpleNamespace(
+        contexts=[context],
+        new_context=AsyncMock(),
+    )
+    playwright = SimpleNamespace(
+        chromium=SimpleNamespace(
+            connect_over_cdp=AsyncMock(return_value=remote_browser),
+        ),
+        stop=AsyncMock(),
+    )
+    factory = SimpleNamespace(
+        start=AsyncMock(return_value=playwright),
+    )
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: factory)
+    instance = DouyinBrowser(tmp_path / "profile", cdp_url="http://browser:9222")
+    instance._display.prepare = AsyncMock()
+    instance._display.close = AsyncMock()
+
+    await instance._ensure()
+
+    assert instance._ctx is context
+    instance._display.prepare.assert_not_awaited()
+    playwright.chromium.connect_over_cdp.assert_awaited_once_with(
+        "http://browser:9222", timeout=15000
+    )
+    await instance.close()
+    context.close.assert_not_awaited()
+    playwright.stop.assert_awaited_once()

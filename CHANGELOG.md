@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.4.1
+- 新增 Linux/Docker 服务器人工登录：独立 Chromium + Xvfb + x11vnc + noVNC 服务，管理员可在真实浏览器完成扫码、短信和滑块验证。
+- 新增 `dy_remote_login`（别名 `dy服务器登录` / `dy人工登录` / `dy远程登录`），通过 CDP 复用同一浏览器和持久化 profile；配置 `browser_cdp_url` 后，`dy登录` 自动优先进入 noVNC 人工登录。
+- 登录成功不再只凭 `sessionid` 判断，需由抖音页面确认；`dy状态` 区分“页面已确认”“仅有 Cookie”“未登录”，避免失效 Cookie 被误报为可用。
+- 新增 `browser_cdp_url`、`browser_vnc_url`、`browser_manual_timeout` 配置和 Docker Compose 浏览器服务。CDP 只在容器网络内开放，noVNC 默认仅绑定 `127.0.0.1`，登录 profile 使用 named volume 持久化。
+- 保留 `dy_qr` 自动截图流程：拼图滑块分段拖动并停 1.5 秒，验证框消失后固定等待 5 秒再截码；自动验证持续被拒绝时可改用 noVNC 人工接管。
+- README 增加 Docker 网络检查、SSH 隧道、noVNC 安全访问、登录态判定和服务器 IP/地区限制说明；新增 CDP、人工登录和状态判定测试，当前 40 项测试通过。
+
 ## v1.4.0
 - 重做服务器扫码登录：持续检查页面截图，只有能解码的登录二维码才发回发起会话，避免发送验证码页、占位图或下载 App 的二维码。
 - 修复旧流程在等待扫码超时、关闭浏览器后才发图的问题；发图后保持页面等待确认，二维码过期自动刷新并推送新图。

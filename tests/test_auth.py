@@ -184,3 +184,51 @@ async def test_already_logged_in_does_not_open_login_page(session):
     browser.new_page.assert_not_called()
     browser.save_login_state.assert_awaited_once()
     send.assert_not_called()
+
+
+async def test_manual_login_saves_confirmed_session(session):
+    _, browser = session
+    browser.cdp_url = "http://browser:9222"
+    browser.is_logged_in.side_effect = [False, True]
+    statuses = []
+
+    async def status(text):
+        statuses.append(text)
+
+    assert await auth.run_manual_login(browser, status, timeout=600)
+    browser.save_login_state.assert_awaited_once()
+    browser.close_page.assert_awaited_once()
+    assert any("noVNC" in text for text in statuses)
+
+
+async def test_manual_login_timeout_keeps_page_open(session):
+    clock, browser = session
+    browser.cdp_url = "http://browser:9222"
+    assert not await auth.run_manual_login(browser, AsyncMock(), timeout=30)
+    assert clock.now == 30
+    browser.close_page.assert_not_awaited()
+
+
+async def test_manual_login_requires_cdp(session):
+    _, browser = session
+    browser.cdp_url = ""
+    with pytest.raises(auth.LoginError, match="browser_cdp_url"):
+        await auth.run_manual_login(browser, AsyncMock())
+
+
+async def test_login_status_distinguishes_cookie_only(tmp_path, monkeypatch):
+    browser = SimpleNamespace(
+        cookies=AsyncMock(
+            return_value=[
+                {
+                    "name": "sessionid",
+                    "value": "TEST_ONLY",
+                    "domain": ".douyin.com",
+                    "expires": -1,
+                }
+            ]
+        ),
+        is_logged_in=AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(auth.DouyinBrowser, "get", lambda **kwargs: browser)
+    assert await auth.login_status(tmp_path / "profile") == (False, "cookie_only")

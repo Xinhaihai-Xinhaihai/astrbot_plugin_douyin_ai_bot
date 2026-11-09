@@ -16,10 +16,73 @@ from .login_capture import capture_qr, open_login, refresh_qr
 
 POST_CAPTCHA_DELAY = 5.0
 POLL_INTERVAL = 1.0
+MANUAL_POLL_INTERVAL = 2.0
 
 
 class LoginError(RuntimeError):
     """可以向用户展示的登录错误（不包含 cookie 或二维码内容）。"""
+
+
+async def run_manual_login(
+    browser: DouyinBrowser,
+    on_status: Callable[[str], Awaitable[None]],
+    *,
+    timeout: int = 600,
+) -> bool:
+    """在服务器浏览器中打开抖音，等待管理员通过 noVNC 完成登录。
+
+    Args:
+        browser: 已配置 CDP 地址的共享浏览器。
+        on_status: 向发起命令的管理员发送状态文本。
+        timeout: 等待管理员完成扫码、短信或滑块验证的秒数。
+
+    Returns:
+        抖音页面确认登录成功时为 True，超时或页面关闭时为 False。
+
+    Raises:
+        LoginError: 未配置 CDP 浏览器地址。
+    """
+    if not browser.cdp_url:
+        raise LoginError("未配置 browser_cdp_url，无法使用服务器人工接管登录。")
+    if await browser.is_logged_in():
+        await browser.save_login_state()
+        return True
+
+    page = await browser.new_page(home=False)
+    page.set_default_timeout(3000)
+    loop = asyncio.get_running_loop()
+    success = False
+    try:
+        try:
+            await page.goto(
+                "https://www.douyin.com/",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+        except PlaywrightTimeout:
+            logger.info("[douyin_ai] 人工登录首页加载较慢，继续等待页面可用")
+        try:
+            await open_login(page)
+        except PlaywrightError:
+            logger.info("[douyin_ai] 未能自动打开登录框，管理员可在 noVNC 中手动点击")
+        await on_status(
+            "抖音登录页已打开。请通过 noVNC 完成扫码、短信或滑块验证，"
+            "插件会持续检查真实登录状态。"
+        )
+
+        deadline = loop.time() + max(30, timeout)
+        while loop.time() < deadline:
+            if page.is_closed():
+                raise LoginError("人工登录页面已关闭，请重新发送 dy_remote_login。")
+            if await browser.is_logged_in():
+                await browser.save_login_state()
+                success = True
+                return True
+            await asyncio.sleep(min(MANUAL_POLL_INTERVAL, deadline - loop.time()))
+        return False
+    finally:
+        if success and not page.is_closed():
+            await browser.close_page(page)
 
 
 async def run_qr_login(
@@ -201,3 +264,34 @@ async def is_logged_in() -> bool:
         return False
     browser = DouyinBrowser.get(profile_dir=profile, headless=True, channel="msedge")
     return await browser.is_logged_in()
+
+
+async def login_status(profile_dir: Path | None = None) -> tuple[bool, str]:
+    """返回登录确认状态和可供管理面板展示的原因。
+
+    Args:
+        profile_dir: 插件数据目录中的 browser_profile；留空时使用默认路径。
+
+    Returns:
+        `(True, "verified")` 表示抖音页面已确认登录；
+        `(False, "cookie_only")` 表示只有会话 Cookie、尚未确认；
+        `(False, "missing")` 表示没有可用会话 Cookie。
+    """
+    if profile_dir is None:
+        from astrbot.api.star import StarTools
+
+        profile_dir = (
+            Path(StarTools.get_data_dir("astrbot_plugin_douyin_ai_bot"))
+            / "browser_profile"
+        )
+    browser = DouyinBrowser.get(
+        profile_dir=profile_dir,
+        headless=True,
+        channel="msedge",
+    )
+    cookies = await browser.cookies()
+    if not DouyinBrowser._has_session(cookies):
+        return False, "missing"
+    if await browser.is_logged_in():
+        return True, "verified"
+    return False, "cookie_only"

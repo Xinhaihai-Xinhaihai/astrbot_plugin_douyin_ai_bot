@@ -9,6 +9,7 @@
 - **主动刷视频**：定时刷一批视频（特别关心 up 优先）→ 逐个打分 → 过线才评论 → 截图推直播转发群
 - **互动提醒**：轮询私信新消息、我发的评论被谁回复了，推直播转发群；支持一键回私信
 - **服务器扫码登录**：持续截图等待二维码 / 自动尝试拼图滑块 / 验证通过后等 5 秒截码推送；也可导入浏览器 Cookie
+- **服务器人工登录**：Docker 部署可连接独立 Chromium，通过 noVNC 在真实浏览器完成扫码、短信或滑块验证；适合自动验证被服务器风控拒绝的场景
 
 不点赞、不收藏、不刷量。评论频率受「同视频冷却 + 全局间隔」双重限制。
 
@@ -71,7 +72,8 @@
 | `dy互动 开/关` | 开/关私信+评论回复轮询 |
 | `dy互动 私信回复 <内容>` | 用抖音身份回最近私信会话 |
 | `dy刷状态` | 主动刷/互动/口味/特别关心/主人 一览 |
-| `dy登录` | 管理员获取登录二维码，与 `dy_qr` 相同，支持无桌面服务器 |
+| `dy登录` | 管理员登录；配置 `browser_cdp_url` 时自动进入 noVNC 人工登录，否则与 `dy_qr` 相同 |
+| `dy_remote_login` | 管理员通过 noVNC 在服务器 Chromium 中完成扫码、短信或滑块验证；别名 `dy服务器登录` / `dy人工登录` / `dy远程登录` |
 | `dy_qr` | 管理员扫码登录：自动尝试拼图滑块，通过后等 5 秒截码并发回当前会话 |
 | `dy_cookie <整段Cookie 或发txt文件>` | 浏览器登录抖音后 F12-Cookie 全选复制，贴过来导入 |
 | `dy状态` | 登录态 / 订阅 / 转发群 |
@@ -80,43 +82,96 @@
 
 ## 服务器登录
 
-`dy登录` 和 `dy_qr` 使用同一条截图登录流程，不需要远程桌面或开放调试端口。登录、二维码及 Cookie 导入命令仅限 AstrBot 管理员。
+服务器提供两条登录路径：
 
-默认 `browser_mode=auto` 使用普通浏览器。Linux 无显示环境时，插件自动启动独立 Xvfb 虚拟显示，浏览器仍在服务器上运行，二维码自动截图发到聊天中。已有 `DISPLAY` 时复用现有显示；Windows/macOS 使用本机浏览器窗口。
+- **推荐：noVNC 人工接管**。发送 `dy_remote_login`，管理员在真实 Chromium 中完成扫码、短信或任意滑块验证。AstrBot 通过 CDP 复用同一个浏览器和持久化 profile，每 2 秒检查抖音页面是否已确认登录。适合 Linux/Docker 环境，也适合自动滑块持续返回“操作过快 [5014][502]”的情况。
+- **自动二维码截图**。发送 `dy_qr`，插件自动等待二维码、分段处理拼图滑块，并在验证框消失后固定等待 5 秒再截取新二维码发回当前会话。
 
-无头浏览器中的“操作过快 [5014][502]”不一定由拖动速度引起：分段等待后仍可能被服务端拒绝。普通浏览器模式是本次增加的可选运行路径，不能保证所有服务器网络环境都通过验证。
+`dy登录` 在配置了 `browser_cdp_url` 时自动进入 noVNC 人工登录；未配置时沿用 `dy_qr` 的自动截图流程。登录、二维码和 Cookie 命令仅限 AstrBot 管理员。
 
-1. 在 **AstrBot 运行环境内**安装依赖与浏览器；Docker 部署需在容器内执行，并持久化 AstrBot 的 `data` 目录：
+### Docker / Docker Compose 人工登录
+
+项目自带 `docker-compose.browser.yml`，会启动一个独立的 Chromium、Xvfb、x11vnc 和 noVNC 服务。Chromium 只在 AstrBot 的 Docker 网络内开放 CDP 端口，noVNC 默认只绑定服务器的 `127.0.0.1:6080`。
+
+1. 确认 AstrBot 容器的 Docker 网络名称：
 
    ```bash
-   # Debian/Ubuntu；系统依赖安装需使用有权限的账户。
-   apt-get update
-   apt-get install -y xvfb
-   python -m pip install -r requirements.txt
-   python -m playwright install --with-deps chromium
+   docker network ls
+   docker inspect astrbot --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"
+"}}{{end}}'
    ```
 
-2. 在插件配置中将 `browser_channel` 留空、`browser_mode` 设为 `auto`，使用 Playwright Chromium；已有 Edge 可保留 `msedge`。修改模式后重载插件。Linux 缺少 Xvfb 会收到安装提示；确实需要无头模式时可显式设置 `headless`，此时不需要 Xvfb。
-3. 给机器人发送 `dy_qr`。插件在后台打开抖音并持续检查截图；遇到拼图滑块会识别缺口、换算显示尺寸并分四段拖动。每段滑动后保持按住，停顿 **1.5 秒**，到达终点并停顿后再松开提交，兼容 iframe 内的验证页。
-4. 页面确认验证框消失后，**固定等待 5 秒**，然后重新截图。只有二维码能实际解码，才将二维码裁剪图发回发起命令的会话；尚未出现则继续等待。无滑块时，二维码就绪即可发送。
-5. 用手机抖音扫码并确认。浏览器在发图后保持打开，默认再等 150 秒；二维码过期后自动刷新并推送新图。登录成功会通知并保存登录态。
+   默认网络名是 `astrbot_default`。如果 Compose 项目使用了自定义名称，请在下一步的 `.env.browser` 中修改 `ASTRBOT_NETWORK`。
 
-准备二维码和等待扫码分别计时，配置为 `qr_prepare_timeout`（默认 180 秒）和 `qr_scan_timeout`（默认 150 秒）。一次只允许一个扫码任务，重复命令会提示当前仍在登录。插件卸载会取消登录任务并清理浏览器。
+2. 在插件目录创建浏览器服务环境文件并修改 VNC 密码：
 
-拼图滑块默认最多尝试 3 次（`qr_slider_attempts`）。普通识别或拖动失败可重试；如果页面明确返回“操作过快 [5014][502]”，本轮立即停止提交，避免对已拒绝的会话反复刷新。自动处理需要拼图结构可识别；旋转、点选等类型不保证支持。失败会明确提示，不会把验证页或占位图当成二维码发送。可调整运行模式后重试，或使用 `dy_cookie` 导入自己浏览器的 Cookie。
+   ```bash
+   cp .env.browser.example .env.browser
+   # 编辑 .env.browser，将 VNC_PASSWORD 改成自己的密码
+   ```
 
-Docker 部署须在 **AstrBot 所在容器内**安装 `xvfb` 和 Chromium 的系统依赖，在镜像构建中保留这些安装步骤；只在宿主机安装不会生效。插件管理自己的 Xvfb 进程，无需另开 VNC、无需 `xvfb-run` 包裹整个 AstrBot，也不会修改其他插件的 `DISPLAY`。卸载时会关闭其创建的显示进程。
+   VNC 密码最多 8 个字符。保持 `VNC_BIND_ADDR=127.0.0.1`，不要把 `6080` 直接映射到公网。
 
-`dy_cookie <整段 Cookie>` 支持 `a=1; b=2` 格式。Cookie、二维码只应发送到自己管理的会话。导入 Cookie 同样需要服务器浏览器，因为后续功能使用浏览器上下文。
+3. 启动并检查浏览器服务：
 
-登录态保存在插件数据目录中的 `browser_profile/` 及 `login_cookies.json`。后者补充保存会话 Cookie，以便重启恢复；这些文件包含登录凭证，不应分享。是否登录按抖音域名下未过期的 `sessionid` / `sessionid_ss` 判断，服务端撤销的会话仍需重新登录。
+   ```bash
+   docker compose --env-file .env.browser -f docker-compose.browser.yml up -d --build
+   docker compose --env-file .env.browser -f docker-compose.browser.yml ps
+   docker compose --env-file .env.browser -f docker-compose.browser.yml logs -f douyin-browser
+   ```
 
-从 1.3.7 升级时，旧 `qr_cdp_port` 配置会被保留但不再启用，`dy_qr` 始终走自动截图流程。
+   Chromium 的登录资料保存在 Docker named volume `douyin-browser-profile` 中。更新镜像或重建容器不会清除登录态。
+
+4. 在 AstrBot 插件面板配置：
+
+   ```text
+   browser_cdp_url=http://douyin-browser:9222
+   browser_vnc_url=http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale
+   browser_manual_timeout=600
+   browser_channel=
+   ```
+
+   `browser_cdp_url` 是 AstrBot 容器访问浏览器服务的**容器内地址**，不要改成宿主机 IP，也不要公开 `9222`。
+
+5. 从自己的电脑建立 SSH 隧道，把服务器的本地 noVNC 端口映射到本机：
+
+   ```bash
+   ssh -L 6080:127.0.0.1:6080 user@server
+   ```
+
+   然后在本地浏览器打开：
+
+   ```text
+   http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale
+   ```
+
+6. 给机器人发送 `dy_remote_login`，在 noVNC 页面输入 VNC 密码，完成抖音的扫码、短信或滑块验证。插件会自动确认登录并保存登录态；超时后浏览器和登录页仍会保留，可以继续操作，也可以重新发送命令。
+
+如果使用 HTTPS 反向代理远程访问 noVNC，必须在代理层增加独立身份认证和访问控制。noVNC 的 VNC 密码不能替代公网访问认证，`6080` 和 `9222` 都不应直接暴露到公网。
+
+### 自动截图登录
+
+`dy_qr` 默认使用 `browser_mode=auto`。Linux 无显示环境时，插件会启动独立 Xvfb；如果部署在 Docker 中，这些系统依赖必须安装在 **AstrBot 容器镜像内**，只在宿主机安装不会生效。
+
+遇到拼图滑块时，插件会识别缺口并按显示尺寸换算距离，分四段拖动。每段滑动后保持按住并停顿约 1.5 秒，到达终点并停顿后再松开，兼容 iframe 内的验证页。页面确认验证框消失后，固定等待 5 秒，再重新截图；只有能实际解码的二维码才会发送，验证码页、占位图和下载 App 的二维码不会被当成登录二维码。
+
+准备二维码和等待扫码分别计时：`qr_prepare_timeout` 默认 180 秒，`qr_scan_timeout` 默认 150 秒。二维码过期会自动刷新并推送新图。自动滑块默认最多尝试 `qr_slider_attempts=3` 次；明确返回“操作过快 [5014][502]”时会停止本轮提交。旋转、点选等无法可靠识别的验证类型请改用 `dy_remote_login`。
+
+### 登录态判定与限制
+
+登录态必须同时具备抖音域名下未过期的 `sessionid` / `sessionid_ss`，并由抖音页面确认 `LOGIN_STATUS=1`、`localStorage.HasUserLogin=1` 或已登录头像。`dy状态` 会区分“页面已确认”“仅有 Cookie”“未登录”。只有 Cookie 不代表服务端会话仍然有效，应重新执行 `dy_remote_login`。
+
+`dy_cookie <整段 Cookie>` 仍可用于导入 `a=1; b=2` 格式，但后续评论和互动同样依赖浏览器上下文。Cookie、二维码和 `login_cookies.json` 都包含登录凭证，只能发送给自己管理的会话，不应分享或提交到 Git。
+
+noVNC 人工接管能处理自动流程无法识别的验证，但抖音仍可能拒绝特定服务器 IP、地区或网络。插件无法绕过平台针对账号、IP 或地区的服务端限制；遇到持续拒绝时，应更换合规的网络环境或改用本地部署。
+
+从 1.3.7 升级时，旧 `qr_cdp_port` 配置会保留但不再启用。自动截图和 noVNC 流程都不需要公开旧的远程调试端口。
 
 ## 依赖
 
 - Python 依赖见 `requirements.txt`（Playwright、aiohttp、OpenCV headless、NumPy、Pillow、imageio-ffmpeg）
 - 系统浏览器：Edge（默认）或 Playwright Chromium（`playwright install chromium`）
+- Docker 人工登录：使用项目自带的 `docker-compose.browser.yml`，不需要在 AstrBot 镜像内额外安装 noVNC
 - 视觉模型：AstrBot 服务商里任一支持图片输入的模型（Gemini / Doubao / GPT-4o 等）
 
 ## 配置项（面板）
@@ -151,6 +206,9 @@ Docker 部署须在 **AstrBot 所在容器内**安装 `xvfb` 和 Chromium 的系
 - `ttwid`：可选，降低风控
 - `browser_channel`：`msedge`（默认）或留空用 Chromium
 - `browser_mode`：`auto`（默认，普通浏览器 + 按需 Xvfb）、`headed`（同样按需提供显示）、`headless`（无头）；修改后重载插件
+- `browser_cdp_url`：独立服务器 Chromium 的容器内 CDP 地址，例如 `http://douyin-browser:9222`；留空使用插件自己的浏览器
+- `browser_vnc_url`：管理员访问 noVNC 的完整地址；远程使用应通过 SSH 隧道或带身份认证的 HTTPS 反向代理
+- `browser_manual_timeout`：`dy_remote_login` 等待人工验证的秒数，默认 600，范围 120-1800
 - `qr_prepare_timeout`：等待二维码和验证的超时秒数，默认 180
 - `qr_scan_timeout`：首张二维码发送后等待扫码的秒数，默认 150
 - `qr_slider_attempts`：自动处理拼图滑块的最大次数，默认 3
@@ -179,8 +237,9 @@ Docker 部署须在 **AstrBot 所在容器内**安装 `xvfb` 和 Chromium 的系
 - `cooldown.json`：评论冷却记录
 - `seen_videos.json`：主动刷看过/评过的视频（30 天）
 - `interact_state.json`：互动已处理记录（30 天）
-- `browser_profile/`：浏览器持久化 profile（登录态）
+- `browser_profile/`：插件自管浏览器的持久化 profile（登录态）
 - `login_cookies.json`：登录成功时保存的会话 Cookie，供重启恢复
+- Docker named volume `douyin-browser-profile`：noVNC 浏览器服务的持久化 profile（登录态）
 
 ## 开发验证
 
@@ -191,7 +250,7 @@ python -m pytest -q
 ruff check main.py core/auth.py core/browser.py core/captcha.py core/display.py core/login_capture.py tests
 ```
 
-浏览器测试默认使用 Chromium；测试机使用 Edge 时，设置环境变量 `PLAYWRIGHT_TEST_CHANNEL=msedge`。测试页及 Cookie 都是本地构造的数据，覆盖 iframe 分段拼图拖动、5 秒延时、二维码占位、发图时序、超时/取消、虚拟显示生命周期和重启恢复，不会登录真实账号。线上检查与尚未验证的环境见 [VALIDATION.md](VALIDATION.md)。
+浏览器测试默认使用 Chromium；测试机使用 Edge 时，设置环境变量 `PLAYWRIGHT_TEST_CHANNEL=msedge`。测试页及 Cookie 都是本地构造的数据，覆盖 iframe 分段拼图拖动、5 秒延时、二维码占位、发图时序、超时/取消、CDP 上下文复用、人工登录、状态判定、虚拟显示生命周期和重启恢复，不会登录真实账号。v1.4.1 共 40 项测试通过；线上检查与尚未验证的环境见 [VALIDATION.md](VALIDATION.md)。
 
 ## 交流群
 
